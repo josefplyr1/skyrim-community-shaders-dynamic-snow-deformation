@@ -34,19 +34,6 @@ static const float kTrenchDetailLatticePeriod = 64.0;
 #	define SNOW_EXCLUSION_DIMS(d) 		float2 d;                  		ExclusionFieldMap.GetDimensions(d.x, d.y)
 #endif
 
-float2 BorderJitter(float2 worldXY, float a_noise)
-{
-	float coarseAmp = min(a_noise, 16.0);
-	return float2(
-			   ShapeNoise(worldXY / 37.0) - 0.5,
-			   ShapeNoise(worldXY / 37.0 + 111.7) - 0.5) *
-	           (2.0 * coarseAmp) +
-	       float2(
-			   ShapeNoise(worldXY / 8.0) - 0.5,
-			   ShapeNoise(worldXY / 8.0 + 57.3) - 0.5) *
-	           (1.2 * a_noise);
-}
-
 float ShellEdgeFade(float2 gridLocal)
 {
 	float2 delta = abs(gridLocal - WarpedHalfSpan);
@@ -143,7 +130,6 @@ float SunEnvelopeRun(uint a_k)
 
 #if defined(PSHADER) || defined(SNOW_MARCH_SUN_CS)
 Texture2D<float> MarchHeightGround : register(t106);
-Texture2D<float> MarchHeightRoad : register(t107);
 Texture2D<float> MarchHeightFar : register(t108);
 Texture2D<float> MarchSunEnvelope : register(t100);
 
@@ -451,12 +437,6 @@ float2 SampleDetailMarks(float2 gridLocal)
 {
 	SNOW_DEFORM_BILINEAR4(v, gridLocal);
 	return float2(saturate(v.y), saturate(v.w));
-}
-
-float SampleScorch(float2 gridLocal)
-{
-	SNOW_DEFORM_BILINEAR4(v, gridLocal);
-	return saturate(-v.y);
 }
 
 static const float kSpellMarkStart = 0.02;

@@ -411,7 +411,6 @@ void SnowDeformation::SetupResources()
 	windowFillCB = new ConstantBuffer(ConstantBufferDesc<WindowFillCB>(), "SnowDeformation::WindowFillCB");
 	shellCB = new ConstantBuffer(ConstantBufferDesc<ShellCB>(), "SnowDeformation::ShellCB");
 	staticsCB = new ConstantBuffer(ConstantBufferDesc<StaticsCB>(), "SnowDeformation::StaticsCB");
-	smoothCB = new ConstantBuffer(ConstantBufferDesc<SmoothCB>(), "SnowDeformation::SmoothCB");
 	heightProcessCB = new ConstantBuffer(ConstantBufferDesc<HeightProcessCB>(), "SnowDeformation::HeightProcessCB");
 	heightGhostCB = new ConstantBuffer(ConstantBufferDesc<HeightGhostCB>(), "SnowDeformation::HeightGhostCB");
 	doorsCB = new ConstantBuffer(ConstantBufferDesc<ExclusionsCB>(), "SnowDeformation::ExclusionsCB");
@@ -831,11 +830,6 @@ void SnowDeformation::PrepassSimulation()
 	capturedStatics.clear();
 	capturedStaticsSet.clear();
 	capturedStaticsSet.reserve(capturedLast);
-	capturedLoadedPrev = capturedLoaded;
-	capturedLoaded = 0;
-	capturedRoads = 0;
-	coatReachBounds[1].swap(coatReachBounds[0]);
-	coatReachBounds[0].clear();
 
 	UpdateActiveWorldspace();
 	snowfallIntensity = ComputeSnowfallIntensity();
@@ -1344,8 +1338,6 @@ ID3D11ComputeShader* SnowDeformation::GetSnowCS(SnowCS a_which)
 		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "SssRestoreCS", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "TerrainFineCS", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\TerrainWindowFillCS.hlsl", "main", nullptr },
-		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "ClusterCullCS", "SNOW_CLUSTER_CULL" },
-		{ L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", "SkinCullCS", nullptr },
 	};
 	auto& slot = snowCS[a_which];
 	if (!slot) {
@@ -1536,44 +1528,14 @@ void SnowDeformation::ClearShaderCache()
 	delete shellTerrainFine;
 	shellTerrainFine = nullptr;
 	shellFineValid = false;
-	delete skinCullCB;
-	skinCullCB = nullptr;
-	delete skinCullBounds;
-	skinCullBounds = nullptr;
-	delete skinCullArgs;
-	skinCullArgs = nullptr;
-	delete skinCullHiZ;
-	skinCullHiZ = nullptr;
-	for (auto* scratch : skinCullHiZScratch)
-		delete scratch;
-	skinCullHiZScratch.clear();
-	skinCullHiZSRVs.clear();
-	skinCullHiZUAVs.clear();
-	skinCullCapacity = 0;
-	skinCullLevels = 0;
-	staticsVSParallaxBlob = nullptr;
-	coatParallaxTried = false;
-	staticsVSBlob = nullptr;
+	heightVSBlob = nullptr;
 	staticsILCache.clear();
-	staticsILParallaxCache.clear();
 	staticsShadersFailed = false;
-	delete clusterBounds;
-	clusterBounds = nullptr;
-	delete clusterIndexPool;
-	clusterIndexPool = nullptr;
-	delete clusterScratchIB;
-	clusterScratchIB = nullptr;
-	delete meshBounds;
-	meshBounds = nullptr;
-	ResetSmoothedNormals(true);
 	for (auto& key : heightRasterKey)
 		key.clear();
 	auto release = [](auto&... a_shaders) { ((a_shaders = nullptr), ...); };
-	release(shellPSDeferred, shellPSPrepassEarly, shellPSEarlyResolve, shellFillVS, shellFillRectVS, shellFillPS, shellFillPSPreSnow, shellFillPSClaim, preSnowCopyCS);
-	release(hiZBuildCS, hiZBuildUAVCS, smoothBoundsCS, smoothClusterCS, smoothAccumulateCS, smoothResolveCS, smoothFlatStatsCS);
-	release(staticsVS, staticsTessVS, staticsHS, staticsDS, staticsPS, staticsPSNoDepth, staticsPSPrepassNoDepth, staticsPSDrapeNoDepth, staticsPSDrapePrepass);
-	release(staticsVSParallax, staticsPSDrapeParallax);
-	release(heightVS, heightPS, heightPSTopOnly, heightPSSkinDepth, heightScrollCS, heightScrollTopCS, heightScrollRasterCS, heightRasterCompareCS, heightCombineCS);
+	release(shellPSDeferred, shellPSPrepassEarly, shellPSEarlyResolve, shellFillVS, shellFillPS, shellFillPSClaim);
+	release(heightVS, heightPS, heightScrollRasterCS, heightRasterCompareCS, heightCombineCS);
 }
 
 void SnowDeformation::LoadSettings(json& o_json)

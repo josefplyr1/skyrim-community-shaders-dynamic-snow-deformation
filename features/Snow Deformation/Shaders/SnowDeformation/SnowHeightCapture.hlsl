@@ -46,14 +46,10 @@ struct VS_OUTPUT
 {
 	float4 Position : SV_POSITION;
 	float WorldZ : TEXCOORD0;
-	float2 SkinDepth : TEXCOORD1;
-	float2 WorldXY : TEXCOORD2;
-	float NormalZ : TEXCOORD3;
+	float2 WorldXY : TEXCOORD1;
 };
 
 #ifdef VSHADER
-StructuredBuffer<float4> SmoothedNormals : register(t10);
-
 VS_OUTPUT main(VS_INPUT input)
 {
 	float3 posMS = input.Position.xyz;
@@ -64,78 +60,23 @@ VS_OUTPUT main(VS_INPUT input)
 
 	float2 ndc = (worldAbs.xy - HeightWindowCenter) / HeightHalfExtent;
 
-	float skinDepth = RoundedDepth;
-	[branch] if (HasSmoothedNormals > 0.5 && ClassOverride < 0.5)
-	{
-		float4 flatStats = SmoothedNormals[(uint)VertexCountF];
-		[flatten] if (flatStats.w > 0.5 && flatStats.x > 0.5)
-			skinDepth = ObjectsDepth;
-	}
-	[flatten] if (ClassOverride > 1.5)
-		skinDepth = ObjectsDepth;
-	[flatten] if (LegacySkin < 0.5)
-		skinDepth = 0.0;
-
 	VS_OUTPUT vsout;
 	vsout.Position = float4(ndc.x, ndc.y, 0.5, 1.0);
 	vsout.WorldZ = worldAbs.z;
-	vsout.SkinDepth = float2(skinDepth, RoadField > 0.5 ? 1.0 : 0.0);
 	vsout.WorldXY = worldAbs.xy;
-	float3 nrmMS = input.Normal.xyz * 2.0 - 1.0;
-	float3 nrmWS = float3(
-		dot(WorldRow0.xyz, nrmMS),
-		dot(WorldRow1.xyz, nrmMS),
-		dot(WorldRow2.xyz, nrmMS));
-	vsout.NormalZ = nrmWS.z / max(length(nrmWS), 1e-5);
 	return vsout;
 }
 #endif
 
-#if defined(PSHADER) && defined(PEEL)
-Texture2D<float> Layer1Top : register(t3);
-
-struct PEEL_OUTPUT
-{
-	float Top : SV_Target0;
-};
-
-PEEL_OUTPUT main(VS_OUTPUT input)
-{
-	[branch] if (input.NormalZ < 0.05)
-		discard;
-	float2 dims;
-	Layer1Top.GetDimensions(dims.x, dims.y);
-	float2 local = (input.WorldXY - HeightWindowCenter) / HeightHalfExtent;
-	float2 uv = float2(local.x * 0.5 + 0.5, 0.5 - local.y * 0.5);
-	int2 t = int2(clamp(uv * dims - 0.5, 0.0, dims.x - 1.001));
-	float top1 = Layer1Top.Load(int3(t, 0));
-	[branch] if (top1 > -50000.0 && input.WorldZ > top1 - PeelTol)
-		discard;
-	PEEL_OUTPUT o;
-	o.Top = input.WorldZ;
-	return o;
-}
-#elif defined(PSHADER) && defined(TOP_ONLY)
-float main(VS_OUTPUT input) : SV_Target0
-{
-	return input.WorldZ;
-}
-#elif defined(PSHADER) && defined(SKIN_DEPTH)
-static const float kNoRoadTop = -1000000.0;
-
-float2 main(VS_OUTPUT input) : SV_Target0
-{
-	return float2(input.SkinDepth.x, input.SkinDepth.y > 0.5 ? input.WorldZ : kNoRoadTop);
-}
-#elif defined(PSHADER)
+#if defined(PSHADER)
 cbuffer HeightProcessCB : register(b0)
 {
 	int2 ScrollDeltaH;
 	uint ClearAllH;
-	uint ConeStepH;
+	uint padConeStepH;
 	float2 HeightWindowCenterH;
 	float HeightHalfExtentH;
-	float SlopePerUnitH;
+	float padSlopePerUnitH;
 	float2 TerrainWindowOriginH;
 	float TerrainTexelSizeH;
 	uint TerrainDimH;

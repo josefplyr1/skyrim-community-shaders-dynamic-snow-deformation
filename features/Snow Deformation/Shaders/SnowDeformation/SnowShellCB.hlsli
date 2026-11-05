@@ -47,9 +47,9 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	float LayoutKeeper5;
 	float TrenchDetailCoverage;
 	float ShellCullBare;
-	float SkinFadeStart;
+	float LayoutKeeper11;
 
-	float SkinFadeEnd;
+	float LayoutKeeper12;
 	float ObjectLiftCap;
 	float2 ObjectHeightCenter;
 
@@ -59,7 +59,7 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	float UndulationAmp;
 
 	float UndulationScale;
-	float SkinTessCapSlope;
+	float LayoutKeeper13;
 	float PointLightsActive;
 	float SkylightingActive;
 
@@ -76,7 +76,7 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	float LayoutKeeper7;
 	float TrenchDetailShadow;
 	float LayoutKeeper3;
-	float ObjectMeetBand;
+	float LayoutKeeper14;
 
 	float BermReach;
 	uint LayoutKeeper10;
@@ -89,7 +89,7 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 
 	float4 SnowParallax;
 
-	float4 SpellShading;
+	float4 padSpellShading;
 	float4 TrackAge;
 	float4 padCrustLook2;
 	float4 BorderStyle;
@@ -103,7 +103,7 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 
 	float4 FineWindow;
 	float4 SlopeDrape;
-	float4 DebugSkinDepth;
+	float4 padDebugSkinDepth;
 	float4 BloodLook;
 	float4 BloodLook2;
 	float4 BloodLook3;

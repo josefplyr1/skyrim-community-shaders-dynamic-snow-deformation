@@ -404,13 +404,10 @@ public:
 		// Lighting's slope mask replaces it instead of scaling it.
 		SnowProjectedNoAlpha = 1 << 20,
 		// Every pass of an object whose snow MATO is multipass (property
-		// kMultiIndexSnow): the base pass writes the skin's read-back mask as
-		// "known, unpainted" so only the snow pass's real paint takes a coat.
+		// kMultiIndexSnow).
 		SnowMultipassBase = 1 << 21,
 		// A shape of a snow-MATO object that the game draws WITHOUT
-		// projection: it overwrites the verdict its projected siblings
-		// wrote with 0, which the drape's read-back reads as "unknown" and
-		// takes for licence to coat. Marks it "known, unpainted" instead.
+		// projection.
 		SnowObjectBarePass = 1 << 22,
 		// With SnowLODBakedIsSnow on a snow-textured shape: the draw blends
 		// over what lies beneath (a decal or alpha-blended overlay, such as a

@@ -67,55 +67,6 @@ namespace SnowShadow
 		return result;
 	}
 
-	float GetCascadeShadowReject(float3 positionRel, float3 normalWS, float a_spread, uint2 a_atlasSlices, float3 a_lightDir, float a_rejectDist)
-	{
-		DirectionalShadowLightData sd = DirectionalShadowLights[0];
-
-		float shadowMapDepth = SharedData::GetScreenDepth(FrameBuffer::GetShadowDepth(positionRel));
-
-		float result = 1.0;
-		[branch] if (shadowMapDepth < sd.EndSplitDistances.y)
-		{
-			float3 positionWS = positionRel + FrameBuffer::CameraPosAdjust.xyz + normalWS * 3.0;
-
-			float atlasW, atlasH, atlasSlices;
-			SnowShadowAtlas.GetDimensions(atlasW, atlasH, atlasSlices);
-			float2 texel = 1.0 / float2(atlasW, atlasH);
-
-			float cascadeSelect = saturate((shadowMapDepth - sd.StartSplitDistances.y) / (sd.EndSplitDistances.x - sd.StartSplitDistances.y));
-			uint primaryCascade = uint(cascadeSelect);
-			uint primarySlice = primaryCascade == 0 ? a_atlasSlices.x : a_atlasSlices.y;
-
-			float3 posLS = mul(sd.ShadowProj[primaryCascade], float4(positionWS, 1)).xyz;
-			posLS.xy = saturate(posLS.xy);
-			posLS.z -= 0.0008 * (primaryCascade + 1.0);
-			float shadow = SampleCascadePCF(posLS, primarySlice, texel, a_spread);
-			[branch] if (a_rejectDist > 0.0 && shadow < 0.999)
-			{
-				float occ = SnowShadowAtlas.Load(int4(int2(posLS.xy * float2(atlasW, atlasH)), primarySlice, 0));
-				float3 posLS2 = mul(sd.ShadowProj[primaryCascade], float4(positionWS + a_lightDir * 16.0, 1)).xyz;
-				float depthPerUnit = abs(posLS2.z - posLS.z) / 16.0;
-				float gap = abs(posLS.z - occ) / max(depthPerUnit, 1e-7);
-				[flatten] if (gap < a_rejectDist)
-					shadow = 1.0;
-			}
-
-			const float blendW = primaryCascade == 0 ? smoothstep(0, 1, cascadeSelect) : 0.0;
-			[branch] if (blendW > 0.0)
-			{
-				posLS = mul(sd.ShadowProj[1], float4(positionWS, 1)).xyz;
-				posLS.xy = saturate(posLS.xy);
-				posLS.z -= 0.0016;
-				float shadowBlend = SampleCascadePCF(posLS, a_atlasSlices.y, texel, a_spread);
-				shadow = lerp(shadow, shadowBlend, blendW);
-			}
-
-			float fade = saturate(shadowMapDepth / sd.EndSplitDistances.y);
-			result = lerp(1.0, shadow, 1.0 - pow(fade * fade, 8));
-		}
-		return result;
-	}
-
 	static const float kSssNearFloorStart = 2500.0;
 	static const float kSssNearFloorEnd = 4000.0;
 

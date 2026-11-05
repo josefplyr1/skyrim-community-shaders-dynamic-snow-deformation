@@ -39,14 +39,11 @@ namespace
 
 ID3D11ComputeShader* SnowDeformation::GetMarchHeightCS(MarchCS a_which)
 {
-	static constexpr const char* entries[kMarchCSCount] = { "MarchHeightTilesCS", "MarchHeightRowsCS", "RoadMarchTilesCS", "RoadMarchRowsCS", "MarchHeightFarRowsCS", "MarchSunTilesCS", "MarchSunRowsCS" };
+	static constexpr const char* entries[kMarchCSCount] = { "MarchHeightTilesCS", "MarchHeightRowsCS", "MarchHeightFarRowsCS", "MarchSunTilesCS", "MarchSunRowsCS" };
 	auto*& slot = marchHeightCS[a_which];
 	if (!slot) {
-		const bool road = a_which == kRoadTilesCS || a_which == kRoadRowsCS;
 		const bool sun = a_which == kSunTilesCS || a_which == kSunRowsCS;
-		slot = static_cast<ID3D11ComputeShader*>(road ?
-				Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl", { { "SNOW_ROAD_MARCH_CS", "" } }, "cs_5_0", entries[a_which]) :
-				Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { sun ? "SNOW_MARCH_SUN_CS" : "SNOW_MARCH_HEIGHT_CS", "" } }, "cs_5_0", entries[a_which]));
+		slot = static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { sun ? "SNOW_MARCH_SUN_CS" : "SNOW_MARCH_HEIGHT_CS", "" } }, "cs_5_0", entries[a_which]));
 	}
 	return slot;
 }
@@ -98,7 +95,7 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 {
 	auto* deform = deformationTextures[0];
 	if (!deform || !deform->srv || !bermFieldTexture || !bermFieldTexture->srv || !bermTileSRV || !bermArgsBuffer || !shellTerrainTexture || !shellTerrainTexture->srv ||
-		!heightTopRaw[heightCurrent] || !heightSkinDepth || !objectSnowCone || !heightBottomFiltered) {
+		!heightBottomFiltered) {
 		marchCacheValid = false;
 		marchFarValid = false;
 		return false;
@@ -110,8 +107,7 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 
 	const uint32_t dim = deform->desc.Width;
 	bool created = false;
-	if (!EnsureMarchTexture(marchHeight[0], dim, "SnowDeformation::MarchHeightGround", created) ||
-		!EnsureMarchTexture(marchHeight[1], dim, "SnowDeformation::MarchHeightRoad", created))
+	if (!EnsureMarchTexture(marchHeight[0], dim, "SnowDeformation::MarchHeightGround", created))
 		return false;
 	if (created)
 		marchCacheValid = false;
@@ -231,20 +227,6 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 		rowsDispatch(kFarRowsCS, kShellFineDim, farStart, farRows);
 	}
 
-	StaticsCB scb{};
-	FillPatchDrawCB(scb);
-	staticsCB->Update(scb);
-	cbs[1] = staticsCB->CB();
-	context->CSSetConstantBuffers(0, 3, cbs);
-	ID3D11ShaderResourceView* rasterSRVs[3] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get(), objectSnowCone->srv.get() };
-	context->CSSetShaderResources(11, 3, rasterSRVs);
-	setUAV(marchHeight[1]);
-	if (tiles) {
-		context->CSSetShader(marchHeightCS[kRoadTilesCS], nullptr, 0);
-		context->DispatchIndirect(bermArgsBuffer.get(), 0);
-	}
-	rowsDispatch(kRoadRowsCS, dim, nearStart, nearRows);
-
 	ID3D11ShaderResourceView* groundSRV = marchHeight[0]->srv.get();
 	ID3D11SamplerState* sunSampler = shellSnowSampler.get();
 	setUAV(marchSunEnvelope);
@@ -276,7 +258,7 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 	marchCacheValid = true;
 	marchFarValid = farCache;
 	marchSunValid = true;
-	ID3D11ShaderResourceView* cacheSRVs[3] = { marchHeight[0]->srv.get(), marchHeight[1]->srv.get(), farCache ? marchHeight[2]->srv.get() : nullptr };
+	ID3D11ShaderResourceView* cacheSRVs[3] = { marchHeight[0]->srv.get(), nullptr, farCache ? marchHeight[2]->srv.get() : nullptr };
 	context->PSSetShaderResources(kMarchSlot, 3, cacheSRVs);
 	ID3D11ShaderResourceView* sunSRV = marchSunEnvelope->srv.get();
 	context->PSSetShaderResources(kMarchSunSlot, 1, &sunSRV);

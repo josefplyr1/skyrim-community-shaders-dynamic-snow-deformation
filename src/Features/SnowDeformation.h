@@ -542,7 +542,6 @@ public:
 	float bloodBurialClock = 0.0f;
 	static constexpr float kRefillStep = 1.0f / 1024.0f;
 	float refillBank = 0.0f;
-	std::vector<float3> coatReachBounds[2];
 
 	static constexpr uint32_t kUndulationFieldDim = 2048;
 	static constexpr float kUndulationFieldTexel = 16.0f;
@@ -615,8 +614,6 @@ public:
 		kSssRestoreCS,
 		kTerrainFineCS,
 		kWindowFillCS,
-		kClusterCullCS,
-		kSkinCullCS,
 		kSnowCSCount
 	};
 	/** @brief Returns one of the trail map's compute shaders, compiling it on first use; null if it failed to compile. */
@@ -781,9 +778,9 @@ public:
 		float LayoutKeeper5;
 		float TrenchDetailCoverage;
 		float ShellCullBare;
-		float SkinFadeStart;
+		float LayoutKeeper11;
 
-		float SkinFadeEnd;
+		float LayoutKeeper12;
 		float ObjectLiftCap;
 		float2 ObjectHeightCenter;
 
@@ -793,7 +790,7 @@ public:
 		float UndulationAmp;
 
 		float UndulationScale;
-		float SkinTessCapSlope;
+		float LayoutKeeper13;
 		float PointLightsActive;
 		float SkylightingActive;
 
@@ -810,7 +807,7 @@ public:
 		float LayoutKeeper7;
 		float TrenchDetailShadow;
 		float LayoutKeeper3;
-		float ObjectMeetBand;
+		float LayoutKeeper14;
 
 		float BermReach;
 		uint LayoutKeeper10;
@@ -823,7 +820,7 @@ public:
 
 		float4 SnowParallax;
 
-		float4 SpellShading;
+		float4 padSpellShading;
 		float4 TrackAge;
 		float4 padCrustLook2;
 		float4 BorderStyle;
@@ -836,7 +833,7 @@ public:
 		DirectX::XMINT2 ShellFlags;
 		float4 FineWindow;
 		float4 SlopeDrape;
-		float4 DebugSkinDepth;
+		float4 padDebugSkinDepth;
 		float4 BloodLook;
 		float4 BloodLook2;
 		float4 BloodLook3;
@@ -864,7 +861,7 @@ public:
 	static constexpr uint32_t kPointShadowMaxLights = 4;
 
 	/**
-	 * @brief Draws the ground snow and the captured statics into the deferred G-buffer.
+	 * @brief Draws the ground snow into the deferred G-buffer.
 	 *
 	 * Called from Deferred::DeferredPasses before the composite, while the
 	 * frame's G-buffer contents and main depth are complete. The ground is the
@@ -887,8 +884,6 @@ public:
 	{
 		kGroundTilesCS,
 		kGroundRowsCS,
-		kRoadTilesCS,
-		kRoadRowsCS,
 		kFarRowsCS,
 		kSunTilesCS,
 		kSunRowsCS,
@@ -972,30 +967,14 @@ public:
 	static void SetShellSeamBounds(ShellCB& a_cb, int a_minX, int a_minY, int a_maxX, int a_maxY);
 
 	ID3D11VertexShader* GetShellFillVS();
-	/** @brief FillVS over the skins' footprint (skinFootprint at VS t62) instead of the whole viewport. */
-	ID3D11VertexShader* GetShellFillRectVS();
 	ID3D11PixelShader* GetShellFillPS();
 	winrt::com_ptr<ID3D11VertexShader> shellFillVS;
-	winrt::com_ptr<ID3D11VertexShader> shellFillRectVS;
 	winrt::com_ptr<ID3D11PixelShader> shellFillPS;
 	bool EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDepthSRV);
 	Texture2D* shellRasterDepth = nullptr;
 	winrt::com_ptr<ID3D11Texture2D> shellTestDepth;
 	winrt::com_ptr<ID3D11DepthStencilView> shellTestDepthDSV;
 	winrt::com_ptr<ID3D11ShaderResourceView> shellTestDepthSRV;
-	winrt::com_ptr<ID3D11Texture2D> preSnowDepth;
-	winrt::com_ptr<ID3D11ShaderResourceView> preSnowDepthSRV;
-	winrt::com_ptr<ID3D11UnorderedAccessView> preSnowDepthUAV;
-	winrt::com_ptr<ID3D11RenderTargetView> preSnowDepthRTV;
-	bool preSnowDepthThisFrame = false;
-	bool preSnowDepthDeferred = false;
-	D3D11_BOX preSnowRect{};
-	/** @brief Takes the pre-snow copy now (PreSnowCopyCS over preSnowRect), with the output-merger bindings saved and restored around it. */
-	void TakePreSnowCopy(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_mainDepthSRV);
-	/** @brief PreSnowCopyCS: the main depth's floats over a_box into an R32F UAV, with the output-merger bindings saved and restored around it. A depth-stencil source cannot be copied in part. */
-	void CopyDepthRect(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_mainDepthSRV, const D3D11_BOX& a_box, ID3D11UnorderedAccessView* a_uav);
-	ID3D11PixelShader* GetShellFillPSPreSnow();
-	winrt::com_ptr<ID3D11PixelShader> shellFillPSPreSnow;
 	/** @brief Origin and extent (pixels) of the rendered rectangle for DepthSyncCS: the viewport under dynamic resolution. */
 	struct alignas(16) DepthSyncRectCB
 	{
@@ -1005,11 +984,8 @@ public:
 	ConstantBuffer* depthSyncRectCB = nullptr;
 	/** @brief depthSyncRectCB, created on first use. */
 	ConstantBuffer* DepthSyncRectBuffer();
-	ID3D11ComputeShader* GetPreSnowCopyCS();
-	winrt::com_ptr<ID3D11ComputeShader> preSnowCopyCS;
-	/** @brief The rectangle a screen pass covers: the viewport plus a one-pixel guard (the skins read neighbours), clamped to the target; the whole target with no viewport. */
+	/** @brief The rectangle a screen pass covers: the viewport plus a_guard pixels, clamped to the target; the whole target with no viewport. */
 	D3D11_BOX ScreenRectBox(const D3D11_VIEWPORT* a_viewport, uint32_t a_width, uint32_t a_height, uint32_t a_guard) const;
-	winrt::com_ptr<ID3D11DepthStencilState> shellPrepassMainDepthState;
 	winrt::com_ptr<ID3D11DepthStencilState> shellFillDepthState;
 
 	ConstantBuffer* shellCB = nullptr;
@@ -1017,13 +993,6 @@ public:
 	/** @brief Loads a DDS through the GAME's resource system, so archives resolve and a modlist override still wins. Shared by the snow and trench detail textures - a second copy would drift. */
 	static bool LoadGameDDS(const std::string& a_dataRelativePath, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv);
 	winrt::com_ptr<ID3D11RasterizerState> shellRasterState;
-	/** @brief Skin draws' raster state: the shell's plus SkinDepthBias / SkinSlopeDepthBias, rebuilt when either slider moves. The decal variant adds the game's decal depth bias (-1, slope -0.65, clamp -100) for skins of decal-mode draws (CapturedSnowStatic::decalDepth). Implemented in SnowDeformation/Shell.cpp. */
-	ID3D11RasterizerState* GetSkinRasterState(bool a_decal = false);
-	winrt::com_ptr<ID3D11RasterizerState> skinRasterState;
-	winrt::com_ptr<ID3D11RasterizerState> skinDecalRasterState;
-	float skinRasterBiasBuilt = 0.0f;
-	float skinRasterSlopeBuilt = 0.0f;
-	static constexpr float kDecalViewportMaxDepth = 0.99997199f;
 	winrt::com_ptr<ID3D11DepthStencilState> shellDepthState;
 
 	winrt::com_ptr<ID3D11ShaderResourceView> lightingCloudShadowSRV;
@@ -1119,39 +1088,14 @@ public:
 	float shellStatMinHeight = 0.0f;
 	float shellStatMaxHeight = 0.0f;
 
-	struct SmoothedNormalsEntry;
 	struct CapturedSnowStatic
 	{
 		RE::NiPointer<RE::BSGeometry> geometry;
 		RE::NiTransform world;
-		bool road;
-		bool fadeExempt;
-		float projThreshold;
-		float projNoiseScale;
-		float projNoiseTiling;
-		float projNoiseWeight;
-		bool forceRounded;
-		bool plankFamily;
-		bool projReal;
-		bool fullCoat;
-		bool lodBatch;
-		bool decalDepth;
-		bool alphaTested;
-		bool snowTex;
-		bool matoSnow;
-		bool mayParallax;
-		winrt::com_ptr<ID3D11ShaderResourceView> parallaxSRV;
-		float4 parallaxUV = {};
-		float4 parallax = {};
-		SmoothedNormalsEntry* smoothEntry = nullptr;
-		uint32_t smoothFrame = UINT32_MAX;
-		uint32_t smoothResets = 0;
+		bool makesLayout;
 	};
 
 	std::vector<CapturedSnowStatic> capturedStatics;
-	uint32_t capturedRoads = 0;
-	uint32_t capturedLoaded = 0;
-	uint32_t capturedLoadedPrev = 0;
 	struct CapturedWater
 	{
 		RE::NiPointer<RE::BSGeometry> geometry;
@@ -1163,8 +1107,8 @@ public:
 	void GatherWaterObjects();
 	ankerl::unordered_dense::set<void*> capturedStaticsSet;
 
-	/** @brief Records projected-snow lighting draws for the statics skin. Called from the BSLightingShader::SetupGeometry hook. Implemented in SnowDeformation/Statics.cpp. */
-	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, uint32_t a_rawTechnique);
+	/** @brief Records the lighting draws the object height raster takes. Called from the BSLightingShader::SetupGeometry hook. Implemented in SnowDeformation/Statics.cpp. */
+	void BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass);
 
 	/** @brief Publishes the per-pass SnowProjectedIsSnow permutation bit, classified from the pass technique (currentRawTechnique), and re-binds the snow set for classified draws. Must run BEFORE the game's SetupGeometry, which consumes the descriptor. Implemented in SnowDeformation/Statics.cpp. */
 	void SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BSRenderPass* a_pass);
@@ -1179,10 +1123,6 @@ public:
 	void ClampCameraAboveSnow();
 	winrt::com_ptr<ID3D11Texture2D> landMasksCopyTex;
 	winrt::com_ptr<ID3D11ShaderResourceView> landMasksCopySRV;
-	winrt::com_ptr<ID3D11Texture2D> preDecalMasksTex;
-	winrt::com_ptr<ID3D11ShaderResourceView> preDecalMasksSRV;
-	uint32_t preDecalMasksFrame = UINT32_MAX;
-	void CapturePreDecalMasks();
 
 	/** @brief Copies a_box (all of it when null) of the resource behind a_srcSRV into an owned SRV-only texture sized to a_extent's far corner (a_box's when null, the source's when both are), recreating it when that size or the format changes. The SRV doubles as the validity signal (nulled by callers on invalid frames), so it is rebuilt even when the texture itself is still current. Implemented in SnowDeformation/Shell.cpp. */
 	static void CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const char* a_name,
@@ -1227,7 +1167,7 @@ public:
 	/** @brief Uploads the pending point-shadow table (t38). The table stays empty until mask-time snapshots exist. Implemented in SnowDeformation/Shadows.cpp. */
 	void UpdatePointShadowLights();
 
-	/** @brief Per-object constants for the statics skin. Layout must match StaticCB in SnowStaticsShell.hlsl. */
+	/** @brief Per-object constants for the height, water and contact captures. Layout must match StaticCB in StaticCBFields.hlsli and SnowContactCapture.hlsl. */
 	struct alignas(16) StaticsCB
 	{
 		float4 WorldRow0;
@@ -1236,170 +1176,21 @@ public:
 		float ObjectsDepth;
 		float2 HeightWindowCenter;
 		float HeightHalfExtent;
-		float HasSmoothedNormals;
-		float RoundedDepth;
-		float VertexCountF;
-		float HasObjectTop;
-		float DebugSkinId;
-		float LegacySkin;
-		float padMoundSteepness;
-		float AlphaTested;
-		float FullCoat;
-		float FadeExempt;
-		float RoadField;
-		float ProjThreshold;
-		float ProjNoiseWeight;
-		float ParallaxFollow;
-		float ClassOverride;
-		float ProjNoiseScale;
-		float SteepThin;
-		float ProjNoiseTiling;
-		float ProjPixelEnable;
-		float padSkinNormalCopy;
-		float padShellMinNz;
-		float PeelTol;
-		float SkinSssSeen;
-		float padMeldSk;
-
-		float FarWindowCenterX;
-		float FarWindowCenterY;
-		float FarHalfExtent;
-		float FarRoadDepth;
-		float DecalMode;
-
-		float HasSkinMasksCopy;
-		float HasPreDecalMasks;
-		float EdgeFlankWidth;
-		float EdgeCoat;
-		float FineHalfExtent;
-		float LODBatch;
-		float TexturedSnow;
-
-		float4 ObjParallaxUV;
-		float4 ObjParallax;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
-
-	/** @brief GPU-side per-mesh CB for SmoothNormalsCS. Layout must match SmoothCB in SmoothNormalsCS.hlsl. */
-	struct alignas(16) SmoothCB
-	{
-		uint32_t VertexCount;
-		uint32_t StrideBytes;
-		uint32_t NormalOffsetBytes;
-		uint32_t PosIsFloat32;
-		uint32_t TableMask;
-		uint32_t ColorOffsetBytes;
-		uint32_t HasColor;
-		uint32_t BoundsSlot;
-		uint32_t IndexPoolOffset;
-		uint32_t IndexCount;
-		uint32_t ClusterOffset;
-		uint32_t ClusterStrideIndices;
-		uint32_t OutBase;
-		uint32_t SmoothPad[3];
-	};
-	STATIC_ASSERT_ALIGNAS_16(SmoothCB);
-
-	struct RangeAllocator
-	{
-		std::map<uint32_t, uint32_t> free;
-		void Reset(uint32_t a_capacity);
-		/** @brief UINT32_MAX when no free range holds a_count at a_align. */
-		uint32_t Allocate(uint32_t a_count, uint32_t a_align = 1);
-		void Release(uint32_t a_offset, uint32_t a_count);
-	};
-
-	struct SmoothedNormalsEntry
-	{
-		winrt::com_ptr<ID3D11ShaderResourceView> srv;
-		bool ready = false;
-		uint32_t boundsSlot = UINT32_MAX;
-		uint32_t clusterOffset = 0;
-		uint32_t clusterCount = 0;
-		uint32_t indexPoolOffset = 0;
-		uint32_t indexCount = 0;
-		uint32_t chunk = UINT32_MAX;
-		uint32_t chunkOffset = 0;
-		uint32_t chunkCount = 0;
-		uint64_t descKey = 0;
-		void* gameIB = nullptr;
-		uint32_t vertexCount = 0;
-		uint32_t triangleCount = 0;
-		uint32_t lastUsedFrame = 0;
-		std::list<void*>::iterator lru;
-	};
-	static constexpr uint32_t kSmoothedNormalsCap = 1024;
-	static constexpr uint32_t kSmoothedNormalsChunkElements = 1u << 20;
-	struct SmoothedNormalsChunk
-	{
-		winrt::com_ptr<ID3D11Buffer> buffer;
-		winrt::com_ptr<ID3D11UnorderedAccessView> uav;
-		RangeAllocator ranges;
-		uint32_t capacity = 0;
-	};
-	std::vector<SmoothedNormalsChunk> smoothedNormalsChunks;
-	std::list<void*> smoothedNormalsLru;
-	winrt::com_ptr<ID3D11Buffer> smoothSource;
-	winrt::com_ptr<ID3D11ShaderResourceView> smoothSourceSRV;
-	uint32_t smoothSourceBytes = 0;
-	winrt::com_ptr<ID3D11Buffer> smoothTable;
-	std::vector<winrt::com_ptr<ID3D11UnorderedAccessView>> smoothTableUAVs;
-	uint32_t smoothTableSlots = 0;
-	bool smoothAllocatorsLive = false;
-	bool EnsureSmoothBuildScratch(uint32_t a_sourceBytes, uint32_t a_tableSlots);
-	bool AllocateSmoothedNormals(uint32_t a_count, uint32_t& a_chunk, uint32_t& a_offset);
-	void EvictSmoothedNormals(std::unordered_map<void*, SmoothedNormalsEntry>::iterator a_it);
-	/** @brief Drops every entry and frees every pool range; the buffers stay unless a_release. */
-	void ResetSmoothedNormals(bool a_release);
-	static constexpr uint32_t kMeshBoundsSlots = 1024;
-	Buffer* meshBounds = nullptr;
-	RangeAllocator meshBoundsFree;
-	winrt::com_ptr<ID3D11ComputeShader> smoothBoundsCS;
-
-	static constexpr uint32_t kClusterGroup = 256;
-	static constexpr uint32_t kClusterTrisBase = 64;
-	static constexpr uint32_t kClusterSlots = 65536;
-	static constexpr uint32_t kClusterIndexPoolIndices = 4u * 1024u * 1024u;
-	static constexpr uint32_t kClusterScratchMaxIndices = 8u * 1024u * 1024u;
-	uint32_t clusterScratchCapacity = 0;
-	uint32_t clusterScratchNeeded = 0;
-	winrt::com_ptr<ID3D11ComputeShader> smoothClusterCS;
-	bool EnsureClusterResources(uint32_t a_scratchIndices);
-	Buffer* clusterBounds = nullptr;
-	Buffer* clusterIndexPool = nullptr;
-	Buffer* clusterScratchIB = nullptr;
-	RangeAllocator clusterFree;
-	RangeAllocator clusterIndexPoolFree;
+	static_assert(sizeof(StaticsCB) == 64, "StaticsCB must match the fxc-reflected StaticCB of SnowHeightCapture and SnowContactCapture");
 
 	template <class F>
 	static void TimedTraverse(RE::NiAVObject* a_root, F&& a_visitor)
 	{
 		RE::BSVisit::TraverseScenegraphCollision(a_root, std::ref(a_visitor));
 	}
-	std::unordered_map<void*, SmoothedNormalsEntry> smoothedNormalsCache;
-	winrt::com_ptr<ID3D11ComputeShader> smoothAccumulateCS;
-	winrt::com_ptr<ID3D11ComputeShader> smoothResolveCS;
-	winrt::com_ptr<ID3D11ComputeShader> smoothFlatStatsCS;
-	ConstantBuffer* smoothCB = nullptr;
-
-	/** @brief The smoothed-normal entry for a captured geometry, built on first sight (SmoothNormalsCS passes) and cached thereafter; usable once ready. Null without one (the VS falls back to raw normals). Implemented in SnowDeformation/Statics.cpp. */
-	SmoothedNormalsEntry* EnsureSmoothedNormals(RE::BSGeometry* a_geometry);
-	/** @brief EnsureSmoothedNormals for a capture, looked up once per frame. */
-	SmoothedNormalsEntry* SmoothedNormalsFor(CapturedSnowStatic& a_cap);
-	uint32_t smoothedNormalsResets = 0;
-	/** @brief ONE StaticsCB recipe for both the visible skin draw and the shadow caster - the caster must be the exact surface the shell renders, and a drifted copy of this fill would be the CB-mirror class of bug. Presence flags come from the call site (the caster looks resources up without creating them). */
-	void FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4Shell, float a_vertexCount, bool a_hasSmoothedNormals, bool a_hasObjectTop, StaticsCB& a_scb) const;
-	/** @brief The StaticsCB recipe of the trench patch lattice, which the road march cache reads. Implemented in SnowDeformation/Statics.cpp. */
-	void FillPatchDrawCB(StaticsCB& a_scb) const;
 
 	static constexpr uint kHeightMapDim = 2048;
-	static constexpr float kObjectConeSlope = 3.0f;
 	/** @brief The live half-extent: Settings::ObjectRasterReachM in world units. Every window fill, texel derivation and shader mirror must take it from here - the texel size is derived from it, so a call site left on the constant addresses a different grid. */
 	float ObjectRasterHalfExtent() const { return std::clamp(settings.ObjectRasterReachM, 29.0f, 234.0f) * kUnitsPerMeter; }
-	/** @brief Horizontal camera distance (units) at which a non-exempt skin has dissolved whole (ShellCB::SkinFadeEnd). */
-	float SkinFadeEndUnits() const { return settings.RangeSkinsM * kUnitsPerMeter; }
 	bool cityWorldspace = false;
-	/** @brief Landscape shell, road class and patch are off this frame (city, CityShells off). */
+	/** @brief Landscape shell and road class are off this frame (city, CityShells off). */
 	bool GroundShellsSuspended() const { return cityWorldspace && !settings.CityShells; }
 	/** @brief 2^(1 - Berm Steepness): the berm tap reach both the bake and the shells use. Exactly 1 at the default. */
 	float BermReachScale() const { return std::exp2(1.0f - std::clamp(settings.BermSteepness, 0.0f, 2.0f)); }
@@ -1413,63 +1204,24 @@ public:
 	}
 	float objectRasterHalfExtentBuilt = 0.0f;
 
-	/**
-	 * @brief Near clipmap level: the same 2048 grid over a QUARTER of the
-	 * reach, so its texel is a quarter of the coarse level's.
-	 *
-	 * Single-buffered on purpose - it is rebuilt from this frame's captures
-	 * every frame and carries no ghost. The coarse level keeps the history,
-	 * and every reader falls back to it outside the fine window, which is
-	 * also what makes the fine level free of the scroll/decay machinery.
-	 * Its centre IS the coarse window's: a coarse texel is four fine ones, so
-	 * one snap serves both grids and only the half-extent has to reach the shaders.
-	 */
-	/** @brief A QUARTER of the coarse reach, always: the two levels then sit a fixed factor of four apart however far the coarse one is asked to reach, so raising the reach coarsens the near field by the same factor it coarsens the far one instead of stranding it. At the 100 m default that is 25 m at 1.7 world units a texel. */
-	float FineRasterHalfExtent() const { return ObjectRasterHalfExtent() * 0.25f; }
 	static constexpr float kHeightMapEmptyTop = -100000.0f;
 	static constexpr float kHeightMapEmptyBottom = 100000.0f;
 
-	static constexpr float kPeelTol = 8.0f;
-	static constexpr float kRimStep = 6.0f;
-	static constexpr float kOverheadIgnore = 0.0f;
 	static constexpr float kShelterBandHeight = 250.0f;
-	static constexpr float kDiffuseLambda = 0.5f;
 
 	Texture2D* heightTopRaw[2] = { nullptr, nullptr };
 	Texture2D* heightBottomRaw[2] = { nullptr, nullptr };
 	Texture2D* heightRaster = nullptr;
 	Texture2D* heightBottomFiltered = nullptr;
-	Texture2D* heightScratch = nullptr;
-	Texture2D* objectSnowCone = nullptr;
-	Texture2D* heightTop2Raw[2] = { nullptr, nullptr };
-	Texture2D* objectSkyOpen = nullptr;
 	Texture2D* heightTileEmpty = nullptr;
-	Texture2D* heightTopRawFine = nullptr;
-	Texture2D* heightTopRawFar = nullptr;
-	float2 farWindowCenter = { 0, 0 };
-	float farHalfExtentLive = 0.0f;
-	/** @brief The far road level can be built (with the road maps): PatchTop and RoadOwnsColumn read it outside the coarse window, so road snow runs to the loaded grid's edge instead of handing back to the flat skin at ObjectRasterReachM. */
-	bool FarLevelActive() const { return heightTopRawFar && settings.RoadMeshesDepth > 0.5f; }
-	uint32_t conePassesCoarse = 0;
-	bool coneFusedOff = false;
-	bool coneVerify = false;
-	uint32_t coneRuns = 0;
-	uint32_t coneFusedRuns = 0;
-	Texture2D* coneVerifyTex = nullptr;
-	bool EnsureConeVerify();
 	bool combineVerify = false;
 	Texture2D* combineVerifyTex = nullptr;
 	bool EnsureCombineVerify();
-	/** @brief Only road skins, the trench patch and the march's road taps read the cones and the near level: true when one of them can this frame. */
-	bool RoadMapsWanted() const;
-	bool skyOpenCurrent = true;
-	bool FineLevelOn() const { return settings.ObjectSnowNearDetail; }
 	static constexpr int kQualityPresetCount = 3;
 	/** @brief Quality presets, Low (0) to High (2); High is the shipped defaults. Sets every preset lever; the rest of the settings keep their values. */
 	void ApplyQualityPreset(int a_preset);
 	/** @brief The preset every lever currently matches, or -1 (custom). */
 	int MatchingQualityPreset() const;
-	Texture2D* heightSkinDepth = nullptr;
 	uint heightCurrent = 0;
 	bool heightMapValid = false;
 	bool heightMapsEmpty = false;
@@ -1515,11 +1267,6 @@ public:
 	void RenderWaterCapture();
 	winrt::com_ptr<ID3D11VertexShader> heightVS;
 	winrt::com_ptr<ID3D11PixelShader> heightPS;
-	winrt::com_ptr<ID3D11PixelShader> heightPSTopOnly;
-	winrt::com_ptr<ID3D11PixelShader> heightPSSkinDepth;
-	winrt::com_ptr<ID3D11PixelShader> heightPeelPS;
-	winrt::com_ptr<ID3D11ComputeShader> heightScrollCS;
-	winrt::com_ptr<ID3D11ComputeShader> heightScrollTopCS;
 	winrt::com_ptr<ID3D11ComputeShader> heightScrollRasterCS;
 	std::vector<uint8_t> heightRasterKey[3];
 	bool heightRasterCacheOff = false;
@@ -1548,34 +1295,29 @@ public:
 	bool EnsureHeightRasterVerify();
 	winrt::com_ptr<ID3D11ComputeShader> heightCombineCS;
 	winrt::com_ptr<ID3D11ComputeShader> heightWaterCoverCS;
-	ID3D11ComputeShader* objectConeSeedCS = nullptr;
-	ID3D11ComputeShader* objectConeCS = nullptr;
-	winrt::com_ptr<ID3D11ComputeShader> objectSkyOpenCS;
-	winrt::com_ptr<ID3D11ComputeShader> objectConeDiffuseCS;
-	ID3D11ComputeShader* objectConeFusedCS = nullptr;
 
 	/** @brief Per-dispatch constants for the height-window processing. Layout must match HeightProcessCB in HeightMapProcessCS.hlsl. */
 	struct alignas(16) HeightProcessCB
 	{
 		DirectX::XMINT2 ScrollDelta;
 		uint ClearAll;
-		uint ConeStep;
+		uint padConeStep;
 
 		float2 HeightWindowCenter;
 		float HeightHalfExtent;
-		float SlopePerUnit;
+		float padSlopePerUnit;
 
 		float2 TerrainWindowOrigin;
 		float TerrainTexelSize;
 		uint TerrainDim;
 
 		float GhostDecay;
-		float ObjectSnowDepth;
-		float RimStep;
-		float OverheadIgnore;
+		float padObjectSnowDepth;
+		float padRimStep;
+		float padOverheadIgnore;
 
 		float ShelterBandHeight;
-		float DiffuseLambda;
+		float padDiffuseLambda;
 		float ShelterMaxHeight;
 		float ShelterConeTan;
 
@@ -1645,10 +1387,6 @@ public:
 	static constexpr float kTorchClearRadius = 40.0f;
 	static constexpr float kElevatedStampCutoff = 70.0f;
 
-	static constexpr float kNoRoadTop = -1000000.0f;
-
-	static constexpr float kPatchSnap = 256.0f;
-	static constexpr float kFarPatchReach = 16384.0f;
 	static constexpr float kHeatClearRadiusMin = 40.0f;
 	static constexpr float kHeatClearRadiusMax = 90.0f;
 	static constexpr float kFireClearRadius = 300.0f;
@@ -1793,71 +1531,7 @@ public:
 	uint32_t cascadeCountFrame = UINT32_MAX;
 	static constexpr int kGatherJumpTexels = 32;
 
-	winrt::com_ptr<ID3D11VertexShader> staticsVS;
-	winrt::com_ptr<ID3D11PixelShader> staticsPS;
-	winrt::com_ptr<ID3D11PixelShader> staticsPSNoDepth;
-	winrt::com_ptr<ID3D11PixelShader> staticsPSPrepassNoDepth;
-	winrt::com_ptr<ID3D11PixelShader> staticsPSDrapeNoDepth;
-	winrt::com_ptr<ID3D11PixelShader> staticsPSDrapePrepass;
-	winrt::com_ptr<ID3D11VertexShader> staticsVSParallax;
-	winrt::com_ptr<ID3DBlob> staticsVSParallaxBlob;
-	winrt::com_ptr<ID3D11PixelShader> staticsPSDrapeParallax;
-	bool coatParallaxTried = false;
-	/** @brief Compiles the two on first use (the setting on); true when both exist. */
-	bool EnsureCoatParallaxShaders();
-	/** @brief Whole-skin occlusion cull (DepthSyncCS.hlsl HiZBuildCS / SkinCullCS): a max-depth pyramid of the scene depth, one compute thread per skin testing its bounding sphere (worldBound + lift margin) against it, and per-skin DrawIndexedInstancedIndirect arguments with instance count 0 or 1. Skins outside the view or wholly behind the scene never enter the pipeline; both prepass and shading loops read the same arguments. Conservative, so bit-identical. Implemented in SnowDeformation/Statics.cpp. */
-	struct alignas(16) SkinCullBound
-	{
-		float Center[3];
-		float Radius;
-		uint32_t IndexCount;
-		uint32_t BoundsSlot;
-		uint32_t HasBounds;
-		float LiftMargin;
-		uint32_t ClusterOffset;
-		uint32_t ClusterCount;
-		uint32_t IndexPoolOffset;
-		uint32_t ScratchBase;
-		float4 WorldRow0;
-		float4 WorldRow1;
-		float4 WorldRow2;
-		float FadeEnd;
-		float pad[3];
-	};
-	struct alignas(16) SkinCullCB
-	{
-		Matrix ViewProj;
-		float4 CameraPosAdjust;
-		float4 Viewport;
-		float4 Depth;
-		uint32_t SkinCount;
-		float Level;
-		float pad[2];
-	};
-	static constexpr uint32_t kSkinCullArgStride = 20;
-	static constexpr float kSkinCullMargin = 24.0f;
-	static constexpr float kSkinCullDepthEps = 1.5e-5f;
-	ConstantBuffer* skinCullCB = nullptr;
-	Buffer* skinCullBounds = nullptr;
-	Buffer* skinCullArgs = nullptr;
-	Buffer* skinFootprint = nullptr;
-	uint32_t skinCullCapacity = 0;
-	Texture2D* skinCullHiZ = nullptr;
-	std::vector<Texture2D*> skinCullHiZScratch;
-	std::vector<winrt::com_ptr<ID3D11ShaderResourceView>> skinCullHiZSRVs;
-	std::vector<winrt::com_ptr<ID3D11UnorderedAccessView>> skinCullHiZUAVs;
-	uint32_t skinCullLevels = 0;
-	ID3D11ComputeShader* GetHiZBuildCS(bool a_fromUAV = false);
-	winrt::com_ptr<ID3D11ComputeShader> hiZBuildUAVCS;
-	winrt::com_ptr<ID3D11ComputeShader> hiZBuildCS;
-	/** @brief a_extentW/H: the pixels the pyramid covers from the depth's origin (the rendered rectangle's far corner). */
-	bool EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderResourceView* a_mainDepthSRV, uint32_t a_extentW, uint32_t a_extentH);
-	winrt::com_ptr<ID3D11VertexShader> staticsTessVS;
-	winrt::com_ptr<ID3D11HullShader> staticsHS;
-	winrt::com_ptr<ID3D11DomainShader> staticsDS;
-	/** @brief The trench patch lattice's centre, snapped to its coarsest band step (StaticsCB::WorldRow0.xy). */
-	float2 PatchLatticeCentre() const;
-	winrt::com_ptr<ID3DBlob> staticsVSBlob;
+	winrt::com_ptr<ID3DBlob> heightVSBlob;
 	bool staticsShadersFailed = false;
 	ConstantBuffer* staticsCB = nullptr;
 	winrt::com_ptr<ID3D11DeviceContext1> staticsContext1;
@@ -1873,11 +1547,8 @@ public:
 	bool UploadStaticsRecords(const StaticsCB* a_records, uint32_t a_count, const uint8_t* a_needed = nullptr);
 	void BindStaticsRecord(uint32_t a_index, bool a_pixelStage, bool a_tessStages, uint32_t& a_parity);
 	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> staticsILCache;
-	/** @brief Input layout for a vertex descriptor, created on first sight against the statics VS (POSITION+NORMAL; any VS reading a subset binds to it). Null is cached for descriptors that cannot be laid out. */
+	/** @brief Input layout for a vertex descriptor, created on first sight against the height capture VS (POSITION+NORMAL; any VS reading a subset binds to it). Null is cached for descriptors that cannot be laid out. */
 	ID3D11InputLayout* StaticsInputLayoutFor(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc);
-	std::unordered_map<uint64_t, winrt::com_ptr<ID3D11InputLayout>> staticsILParallaxCache;
-	/** @brief The same against staticsVSParallax, adding TEXCOORD0 and BINORMAL; null (cached) for descriptors without uv or tangents. */
-	ID3D11InputLayout* StaticsParallaxInputLayoutFor(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc);
 
 	Texture2D* contactHeight = nullptr;
 	winrt::com_ptr<ID3D11BlendState> contactMinBlendBodies;
@@ -1950,10 +1621,10 @@ public:
 	/** @brief The contact capture; a_coatOnly (S5 round 8, while the deformation passes sleep) walks only the actors the body coat's snowfall is due. */
 	void DrawContactCapture(ID3D11DeviceContext* a_context, bool a_coatOnly = false);
 
-	/** @brief Compiles the statics skin VS (keeping bytecode) and PS on first use. Implemented in SnowDeformation/Statics.cpp. */
-	bool EnsureStaticsShaders();
-	/** @brief Re-draws this frame's captured projected-snow statics inflated, inside DrawShell's bound state. Implemented in SnowDeformation/Statics.cpp. */
-	void DrawCapturedStatics();
+	/** @brief Compiles the object height raster's shaders on first use, keeping the VS bytecode for the input layouts. Implemented in SnowDeformation/Statics.cpp. */
+	bool EnsureHeightRasterShaders();
+	/** @brief Creates the input layouts of this frame's layout-making captures, which the object height raster finds from the next frame on. Implemented in SnowDeformation/Statics.cpp. */
+	void CreateCaptureLayouts();
 
 	/** @brief Caches a "tile is snow material" bitmask per landscape quad material, for the terrain shader's per-tile snow detection. */
 	void TESObjectLAND_SetupMaterial(RE::TESObjectLAND* land);
@@ -2218,9 +1889,6 @@ public:
 		       snowPrimePhase.load(std::memory_order_acquire) < a_group;
 	}
 	std::thread snowPrimeThread;
-
-	/** @brief Compiles the three SmoothNormalsCS variants; shared by the primer and EnsureSmoothedNormals. Implemented in SnowDeformation/Statics.cpp. */
-	bool EnsureSmoothNormalsCS();
 
 protected:
 

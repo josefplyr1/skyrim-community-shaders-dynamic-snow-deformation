@@ -54,7 +54,6 @@ Texture2D<float4> SnowDiffuse : register(t2);
 Texture2D<float> SceneDepth : register(t3);
 Texture2D<float2> ObjectBottoms : register(t5);
 Texture2D<float> ObjectTopsRaw : register(t11);
-Texture2D<float2> ObjectSkinDepthMap : register(t12);
 Texture2D<float4> SnowNormalMap : register(t6);
 Texture2D<float4> SnowRmaosMap : register(t7);
 Texture2D<float4> SnowHeightMap : register(t8);
@@ -225,118 +224,6 @@ float2 SampleExclusionMask(float2 worldXY)
 	[branch] if (ObjectLiftCap > 0.0)
 		nearMask = SampleObjectBottom(worldXY);
 	return max(nearMask, SampleExclusionField(worldXY));
-}
-
-static const float kNoRoadTop = -1000000.0;
-
-float2 RoadRasterAt(float2 worldXY)
-{
-	float2 s = float2(0.0, kNoRoadTop);
-	float2 dims;
-	bool valid;
-	const float2 t = ObjectMapTexel(worldXY, dims, valid);
-	[branch] if (valid)
-	{
-		const int2 t0 = (int2)t;
-		const int2 t1 = min(t0 + 1, int2(dims) - 1);
-		s = max(max(ObjectSkinDepthMap.Load(int3(t0.x, t0.y, 0)), ObjectSkinDepthMap.Load(int3(t1.x, t0.y, 0))),
-			max(ObjectSkinDepthMap.Load(int3(t0.x, t1.y, 0)), ObjectSkinDepthMap.Load(int3(t1.x, t1.y, 0))));
-	}
-	return s;
-}
-
-float3 RoadRasterBilinear(float2 worldXY)
-{
-	float3 r = float3(0.0, 0.0, 0.0);
-	float2 dims;
-	bool valid;
-	const float2 t = ObjectMapTexel(worldXY, dims, valid);
-	[branch] if (valid)
-	{
-		const int2 t0 = (int2)t;
-		const int2 t1 = min(t0 + 1, int2(dims) - 1);
-		const float2 f = t - t0;
-		const float2 s00 = ObjectSkinDepthMap.Load(int3(t0.x, t0.y, 0));
-		const float2 s10 = ObjectSkinDepthMap.Load(int3(t1.x, t0.y, 0));
-		const float2 s01 = ObjectSkinDepthMap.Load(int3(t0.x, t1.y, 0));
-		const float2 s11 = ObjectSkinDepthMap.Load(int3(t1.x, t1.y, 0));
-		const float4 w = float4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y) *
-		                 float4((s00.y > kNoRoadTop * 0.5 && s00.x >= 1.0) ? 1.0 : 0.0, (s10.y > kNoRoadTop * 0.5 && s10.x >= 1.0) ? 1.0 : 0.0,
-							 (s01.y > kNoRoadTop * 0.5 && s01.x >= 1.0) ? 1.0 : 0.0, (s11.y > kNoRoadTop * 0.5 && s11.x >= 1.0) ? 1.0 : 0.0);
-		r.x = dot(w, 1.0);
-		r.y = dot(w, float4(s00.y, s10.y, s01.y, s11.y)) / max(r.x, 1e-6);
-		r.z = dot(w, float4(s00.x, s10.x, s01.x, s11.x)) / max(r.x, 1e-6);
-	}
-	return r;
-}
-
-float RoadPatchZ(float2 road, float deform, float blur, float und, float2 worldXY, float3 look)
-{
-	const float carved = CarveProfile(deform, blur, road.x, worldXY, look);
-	return road.y + carved + und * saturate(carved / 8.0) - 0.4;
-}
-
-float2 RoadTopSlope(float3 a_c, float3 a_px, float3 a_nx, float3 a_py, float3 a_ny, float step)
-{
-	const float2 g = float2((a_px.x * (a_px.y - a_c.y) + a_nx.x * (a_c.y - a_nx.y)) / max(a_px.x + a_nx.x, 1e-3),
-						 (a_py.x * (a_py.y - a_c.y) + a_ny.x * (a_c.y - a_ny.y)) / max(a_py.x + a_ny.x, 1e-3)) /
-	                 step;
-	return g / max(1.0, length(g));
-}
-
-float SampleObjectTopRaw(float2 worldXY, bool a_skipRoads)
-{
-	float2 dims;
-	bool valid;
-	float2 t = ObjectMapTexel(worldXY, dims, valid);
-	float top = -100000.0;
-	[branch] if (valid)
-	{
-		int2 t0 = (int2)t;
-		float2 f = t - t0;
-		int2 t1 = min(t0 + 1, int2(dims) - 1);
-		float4 tops = float4(
-			ObjectTopsRaw.Load(int3(t0.x, t0.y, 0)), ObjectTopsRaw.Load(int3(t1.x, t0.y, 0)),
-			ObjectTopsRaw.Load(int3(t0.x, t1.y, 0)), ObjectTopsRaw.Load(int3(t1.x, t1.y, 0)));
-		[branch] if (all(tops > -50000.0))
-		{
-			bool road = false;
-			[branch] if (a_skipRoads)
-				road = max(max(ObjectSkinDepthMap.Load(int3(t0.x, t0.y, 0)).y, ObjectSkinDepthMap.Load(int3(t1.x, t0.y, 0)).y),
-						   max(ObjectSkinDepthMap.Load(int3(t0.x, t1.y, 0)).y, ObjectSkinDepthMap.Load(int3(t1.x, t1.y, 0)).y)) > kNoRoadTop * 0.5;
-			[flatten] if (!road)
-				top = lerp(lerp(tops.x, tops.y, f.x), lerp(tops.z, tops.w, f.x), f.y);
-		}
-	}
-	return top;
-}
-
-float3 ShellObjectMeet(float2 worldXY, float sheetZ)
-{
-	float3 result = float3(0.0, 0.0, 0.0);
-	float halfBand = ObjectMeetBand * 0.5;
-	[branch] if (halfBand > 0.0)
-	{
-		float meetTop = SampleObjectTopRaw(worldXY, true);
-		float meetGap = sheetZ - meetTop;
-		[branch] if (meetTop > -50000.0 && meetGap < halfBand * 3.0 && meetGap > -16.0)
-		{
-			const float mStep = 8.0;
-			float mXP = SampleObjectTopRaw(worldXY + float2(mStep, 0.0), false);
-			float mXN = SampleObjectTopRaw(worldXY - float2(mStep, 0.0), false);
-			float mYP = SampleObjectTopRaw(worldXY + float2(0.0, mStep), false);
-			float mYN = SampleObjectTopRaw(worldXY - float2(0.0, mStep), false);
-			[flatten] if (min(min(mXP, mXN), min(mYP, mYN)) > -50000.0)
-			{
-				float2 objectGrad = float2(mXP - mXN, mYP - mYN) / (2.0 * mStep);
-				float objectNz = rsqrt(1.0 + dot(objectGrad, objectGrad));
-				float meet = (1.0 - smoothstep(0.0, halfBand, meetGap * objectNz)) *
-				             (1.0 - smoothstep(8.0, 16.0, -meetGap)) * smoothstep(0.35, 0.6, objectNz);
-				result = float3(meet, objectGrad);
-			}
-		}
-	}
-	return result;
 }
 
 float4 BermFieldPair(float2 gridLocal)
@@ -893,12 +780,6 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 #	endif
 #endif
 	float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
-	float3 objectMeet = float3(0.0, 0.0, 0.0);
-	[branch] if (shellZ < 2048.0)
-	{
-		objectMeet = ShellObjectMeet(GridOrigin + gridLocal, input.WorldPos.z + ShellCameraPosAdjust.z);
-		objectMeet.x *= 1.0 - smoothstep(1024.0, 2048.0, shellZ);
-	}
 #ifdef SNOW_SHELL_DEFERRED
 	coverageAlpha = 1.0;
 #else
@@ -939,31 +820,6 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	float3 terrainNormal = normalize(input.TerrainNormalAlpha.xyz);
 	float pixelDepth = max(TouchDownToe(pixelRampDepth), 0.0);
 	pixelDepth = lerp(pixelDepth, min(pixelDepth, kFireMeltFloor), pixelMelt);
-	float roadMeet = 0.0;
-	float roadMeetDepth = 0.0;
-	float2 roadMeetSlope = 0.0;
-	[branch] if (ObjectMeetBand > 0.0 && ShellFlags.y != 0 && shellZ < 2048.0)
-	{
-		const float2 roadXY = GridOrigin + gridLocal;
-		const float2 road = RoadRasterAt(roadXY);
-		[branch] if (road.y > kNoRoadTop * 0.5 && road.x >= 1.0)
-		{
-			const float3 roadB = RoadRasterBilinear(roadXY);
-			const float2 roadDT = roadB.x > 0.0 ? roadB.zy : road;
-			const float2 centreBlur = ((CompactLook.w > 0.0 || TrackAge.y > 0.0) && !pixelUntouched) ? BermFieldPair(gridLocal).yz : float2(pixelCarve, TrackAge.x);
-			const float roadZ = RoadPatchZ(roadDT, pixelCarve, centreBlur.x, UndulationSampled(roadXY), roadXY, TrackCarveLook(TrackAgeOf(centreBlur.y)));
-			roadMeet = (1.0 - smoothstep(0.0, ObjectMeetBand * 0.5, abs(input.WorldPos.z + ShellCameraPosAdjust.z - roadZ))) *
-			           (1.0 - smoothstep(1024.0, 2048.0, shellZ)) * smoothstep(0.0, 1.0, roadB.x);
-			roadMeetDepth = roadDT.x;
-			[branch] if (roadMeet > 0.001)
-			{
-				const float tStep = 16.0;
-				roadMeetSlope = RoadTopSlope(roadB, RoadRasterBilinear(roadXY + float2(tStep, 0.0)), RoadRasterBilinear(roadXY - float2(tStep, 0.0)),
-					RoadRasterBilinear(roadXY + float2(0.0, tStep)), RoadRasterBilinear(roadXY - float2(0.0, tStep)), tStep);
-			}
-		}
-	}
-	const float meetDepth = lerp(pixelDepth, roadMeetDepth, 0.5 * roadMeet);
 	float2 profileGrad = 0.0;
 	float2 bermGrad = 0.0;
 	float bermCenter = 0.0;
@@ -990,8 +846,8 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 				BermFieldPair(gridLocal + float2(0.0, step)).y, BermFieldPair(gridLocal - float2(0.0, step)).y);
 		}
 		profileGrad = float2(
-						  CarveProfile(saturate(dXP), blur.x, meetDepth, GridOrigin + gridLocal + float2(step, 0.0), carveLook) - CarveProfile(saturate(dXN), blur.y, meetDepth, GridOrigin + gridLocal - float2(step, 0.0), carveLook),
-						  CarveProfile(saturate(dYP), blur.z, meetDepth, GridOrigin + gridLocal + float2(0.0, step), carveLook) - CarveProfile(saturate(dYN), blur.w, meetDepth, GridOrigin + gridLocal - float2(0.0, step), carveLook)) /
+						  CarveProfile(saturate(dXP), blur.x, pixelDepth, GridOrigin + gridLocal + float2(step, 0.0), carveLook) - CarveProfile(saturate(dXN), blur.y, pixelDepth, GridOrigin + gridLocal - float2(step, 0.0), carveLook),
+						  CarveProfile(saturate(dYP), blur.z, pixelDepth, GridOrigin + gridLocal + float2(0.0, step), carveLook) - CarveProfile(saturate(dYN), blur.w, pixelDepth, GridOrigin + gridLocal - float2(0.0, step), carveLook)) /
 		              (2.0 * step);
 		const float bStep = BermGradStep();
 		float mXP = dXP, mXN = dXN, mYP = dYP, mYN = dYN;
@@ -1012,9 +868,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		bermCenter = 0.25 * (bermXP + bermXN + bermYP + bermYN);
 	}
 	float2 macroGrad = -terrainNormal.xy / max(terrainNormal.z, 0.1);
-	macroGrad = lerp(macroGrad, objectMeet.yz, 0.5 * objectMeet.x);
-	macroGrad = lerp(macroGrad, roadMeetSlope, roadMeet);
-	float2 gradZ = macroGrad + profileGrad + bermGrad * meetDepth * BermHeightAmp * BermDepthGate(meetDepth);
+	float2 gradZ = macroGrad + profileGrad + bermGrad * pixelDepth * BermHeightAmp * BermDepthGate(pixelDepth);
 
 	float2 worldXYPS = GridOrigin + gridLocal;
 	float undScale = saturate(pixelDepth / 8.0);
@@ -1036,7 +890,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	[branch] if (!pixelUntouched && detailFade > 0.0 && (TrenchDetailRelief > 0.001 || abs(TrenchDetailRoughness - 1.0) > 0.001))
 	{
 		const float4 detailField = BermFieldPair(gridLocal);
-		const float detailReach = detailFade * (1.0 - objectMeet.x);
+		const float detailReach = detailFade;
 		detailMask = TrenchDetailMask(pixelCarve, detailField.xy, TrenchDetailCoverage) * detailReach;
 		[branch] if (detailMask > 0.0 || SpeedSpoil > 0.5)
 		{

@@ -20,20 +20,6 @@ float3 WarpBand(float au)
 	return found;
 }
 
-float WarpAxisT(float u, float bandVerts[kWarpBands], float bandMul[kWarpBands], float spacing)
-{
-	float a = abs(u);
-	float off = 0.0;
-	[unroll] for (int band = 0; band < kWarpBands; ++band)
-	{
-		float take = min(a, bandVerts[band]);
-		off += take * bandMul[band];
-		a -= take;
-	}
-	off += a * bandMul[kWarpBands - 1];
-	return sign(u) * off * spacing;
-}
-
 float InverseWarpAxis(float w)
 {
 	float a = abs(w) / GridSpacing;

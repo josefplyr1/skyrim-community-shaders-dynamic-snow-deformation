@@ -673,7 +673,7 @@ bool SnowDeformation::LandscapeSnowRefresh()
 {
 	ls.cbValid = false;
 	if (!lastShellCBData || !shellTerrainTexture || !shellTerrainTexture->srv || !GetDeformationSRV() || !heightBottomFiltered ||
-		!heightTopRaw[heightCurrent] || !heightSkinDepth || !shellSnowSampler || !ShellFootprintHasSnow())
+		!heightTopRaw[heightCurrent] || !shellSnowSampler || !ShellFootprintHasSnow())
 		return false;
 
 	auto& fb = globals::game::frameBufferCached;
@@ -738,7 +738,6 @@ void SnowDeformation::LandscapeSurfaceSRVs(ID3D11ShaderResourceView** a_srvs)
 	s[5] = heightBottomFiltered->srv.get();
 	s[8] = shellSnowHeightSRV.get();
 	s[11] = heightTopRaw[heightCurrent]->srv.get();
-	s[12] = heightSkinDepth->srv.get();
 	s[13] = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
 	s[14] = GetBermFieldSRV();
 	s[15] = GetExclusionFieldSRV();

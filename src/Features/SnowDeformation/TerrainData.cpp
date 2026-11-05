@@ -1121,14 +1121,6 @@ bool SnowDeformation::DeformationWindowHasReaders() const
 	if (!GroundShellsSuspended())
 		return DeformationWindowHasSnow();
 	deformSnowVerdict = kSnowGateBare;
-	const float minX = windowOrigin.x, minY = windowOrigin.y;
-	const float maxX = minX + deformWorldSize, maxY = minY + deformWorldSize;
-	for (const auto& b : coatReachBounds[1]) {
-		if (b.x + b.z >= minX && b.x - b.z <= maxX && b.y + b.z >= minY && b.y - b.z <= maxY) {
-			deformSnowVerdict = kSnowGateSnowy;
-			return true;
-		}
-	}
 	return false;
 }
 
@@ -1445,21 +1437,14 @@ void SnowDeformation::CullUnseenCaptures(const ShellCB& a_cb)
 	};
 	bool loadedUnseen = true;
 	for (const auto& cap : capturedStatics)
-		if (!cap.lodBatch && !unseen(cap)) {
+		if (!unseen(cap)) {
 			loadedUnseen = false;
 			break;
 		}
 	const size_t before = capturedStatics.size();
-	std::erase_if(capturedStatics, [&](const CapturedSnowStatic& a_cap) { return a_cap.lodBatch || loadedUnseen; });
+	if (loadedUnseen)
+		capturedStatics.clear();
 	captureViewCulled = uint32_t(before - capturedStatics.size());
-	if (captureViewCulled == 0)
-		return;
-	capturedLoaded = 0;
-	capturedRoads = 0;
-	for (const auto& cap : capturedStatics) {
-		capturedLoaded += cap.lodBatch ? 0u : 1u;
-		capturedRoads += cap.road ? 1u : 0u;
-	}
 }
 
 bool SnowDeformation::GroundNearHasSnow(float a_x, float a_y)

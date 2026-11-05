@@ -277,43 +277,6 @@ void SnowDeformation::RefreshSnowPBRParams()
 	}
 }
 
-ID3D11RasterizerState* SnowDeformation::GetSkinRasterState(bool a_decal)
-{
-	const float bias = settings.SkinDepthBias;
-	const float slope = settings.SkinSlopeDepthBias;
-	if (skinRasterState && skinDecalRasterState && bias == skinRasterBiasBuilt && slope == skinRasterSlopeBuilt)
-		return a_decal ? skinDecalRasterState.get() : skinRasterState.get();
-
-	D3D11_RASTERIZER_DESC rasterDesc{};
-	rasterDesc.FillMode = D3D11_FILL_SOLID;
-	rasterDesc.CullMode = D3D11_CULL_NONE;
-	rasterDesc.DepthClipEnable = TRUE;
-	rasterDesc.DepthBias = -static_cast<INT>(std::lround(bias));
-	rasterDesc.SlopeScaledDepthBias = -slope;
-	rasterDesc.DepthBiasClamp = -1e-5f;
-	winrt::com_ptr<ID3D11RasterizerState> state;
-	if (FAILED(globals::d3d::device->CreateRasterizerState(&rasterDesc, state.put()))) {
-		logger::error("SnowDeformation: skin raster state creation failed (bias {} slope {})", bias, slope);
-		return a_decal ? skinDecalRasterState.get() : skinRasterState.get();
-	}
-	Util::SetResourceName(state.get(), "SnowDeformation::SkinRasterState");
-	D3D11_RASTERIZER_DESC decalDesc = rasterDesc;
-	decalDesc.DepthBias -= 1;
-	decalDesc.SlopeScaledDepthBias -= 0.65f;
-	decalDesc.DepthBiasClamp = -100.0f;
-	winrt::com_ptr<ID3D11RasterizerState> decalState;
-	if (FAILED(globals::d3d::device->CreateRasterizerState(&decalDesc, decalState.put()))) {
-		logger::error("SnowDeformation: skin decal raster state creation failed (bias {} slope {})", bias, slope);
-		return a_decal ? skinDecalRasterState.get() : skinRasterState.get();
-	}
-	Util::SetResourceName(decalState.get(), "SnowDeformation::SkinDecalRasterState");
-	skinRasterState = state;
-	skinDecalRasterState = decalState;
-	skinRasterBiasBuilt = bias;
-	skinRasterSlopeBuilt = slope;
-	return a_decal ? skinDecalRasterState.get() : skinRasterState.get();
-}
-
 std::vector<std::pair<const char*, const char*>> SnowDeformation::ShellPSDefines(const char* a_extra)
 {
 	std::vector<std::pair<const char*, const char*>> defines = { { "PSHADER", "" } };
@@ -333,25 +296,11 @@ ID3D11VertexShader* SnowDeformation::GetShellFillVS()
 	return shellFillVS.get();
 }
 
-ID3D11VertexShader* SnowDeformation::GetShellFillRectVS()
-{
-	if (!shellFillRectVS)
-		shellFillRectVS.attach(static_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "vs_5_0", "FillRectVS")));
-	return shellFillRectVS.get();
-}
-
 ID3D11PixelShader* SnowDeformation::GetShellFillPS()
 {
 	if (!shellFillPS)
 		shellFillPS.attach(static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "ps_5_0", "FillPS")));
 	return shellFillPS.get();
-}
-
-ID3D11PixelShader* SnowDeformation::GetShellFillPSPreSnow()
-{
-	if (!shellFillPSPreSnow)
-		shellFillPSPreSnow.attach(static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", { { "FILL_PRE_SNOW", "" } }, "ps_5_0", "FillPS")));
-	return shellFillPSPreSnow.get();
 }
 
 ID3D11PixelShader* SnowDeformation::GetShellFillPSClaim()
@@ -448,43 +397,6 @@ bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDep
 		if (FAILED(device->CreateShaderResourceView(shellTestDepth.get(), &testSrvDesc, shellTestDepthSRV.put())))
 			return false;
 		Util::SetResourceName(shellTestDepthSRV.get(), "SnowDeformation::ShellTestDepth SRV");
-
-		preSnowDepth = nullptr;
-		preSnowDepthSRV = nullptr;
-		preSnowDepthUAV = nullptr;
-		preSnowDepthRTV = nullptr;
-		D3D11_TEXTURE2D_DESC copyDesc = shellRasterDepth->desc;
-		copyDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_RENDER_TARGET;
-		D3D11_UNORDERED_ACCESS_VIEW_DESC copyUavDesc{};
-		copyUavDesc.Format = DXGI_FORMAT_R32_FLOAT;
-		copyUavDesc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-		D3D11_RENDER_TARGET_VIEW_DESC copyRtvDesc{};
-		copyRtvDesc.Format = DXGI_FORMAT_R32_FLOAT;
-		copyRtvDesc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
-		if (SUCCEEDED(device->CreateTexture2D(&copyDesc, nullptr, preSnowDepth.put()))) {
-			Util::SetResourceName(preSnowDepth.get(), "SnowDeformation::PreSnowDepth");
-			if (FAILED(device->CreateShaderResourceView(preSnowDepth.get(), &testSrvDesc, preSnowDepthSRV.put())) ||
-				FAILED(device->CreateUnorderedAccessView(preSnowDepth.get(), &copyUavDesc, preSnowDepthUAV.put())) ||
-				FAILED(device->CreateRenderTargetView(preSnowDepth.get(), &copyRtvDesc, preSnowDepthRTV.put()))) {
-				preSnowDepth = nullptr;
-				preSnowDepthSRV = nullptr;
-				preSnowDepthUAV = nullptr;
-				preSnowDepthRTV = nullptr;
-			} else {
-				Util::SetResourceName(preSnowDepthSRV.get(), "SnowDeformation::PreSnowDepth SRV");
-				Util::SetResourceName(preSnowDepthUAV.get(), "SnowDeformation::PreSnowDepth UAV");
-				Util::SetResourceName(preSnowDepthRTV.get(), "SnowDeformation::PreSnowDepth RTV");
-			}
-		}
-	}
-	if (!shellPrepassMainDepthState) {
-		D3D11_DEPTH_STENCIL_DESC dsDesc{};
-		dsDesc.DepthEnable = TRUE;
-		dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
-		dsDesc.DepthFunc = D3D11_COMPARISON_EQUAL;
-		if (FAILED(device->CreateDepthStencilState(&dsDesc, shellPrepassMainDepthState.put())))
-			return false;
-		Util::SetResourceName(shellPrepassMainDepthState.get(), "SnowDeformation::ShellPrepassMainDepthState");
 	}
 	if (!shellFillDepthState) {
 		D3D11_DEPTH_STENCIL_DESC dsDesc{};
@@ -594,14 +506,6 @@ void SnowDeformation::SetShellSeamBounds(ShellCB& a_cb, int a_minX, int a_minY, 
 	a_cb.SeamRampInv = 1.0f / 2048.0f;
 }
 
-ID3D11ComputeShader* SnowDeformation::GetPreSnowCopyCS()
-{
-	if (!preSnowCopyCS)
-		preSnowCopyCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", {}, "cs_5_0", "PreSnowCopyCS")));
-	DepthSyncRectBuffer();
-	return preSnowCopyCS.get();
-}
-
 ConstantBuffer* SnowDeformation::DepthSyncRectBuffer()
 {
 	if (!depthSyncRectCB)
@@ -623,46 +527,6 @@ D3D11_BOX SnowDeformation::ScreenRectBox(const D3D11_VIEWPORT* a_viewport, uint3
 	box.right = UINT(std::clamp<int64_t>(right, int64_t(box.left), a_width));
 	box.bottom = UINT(std::clamp<int64_t>(bottom, int64_t(box.top), a_height));
 	return box;
-}
-
-void SnowDeformation::TakePreSnowCopy(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_mainDepthSRV)
-{
-	globals::profiler->BeginPass("SnowDeformation::Ground - Depth & Mask Copies");
-	CopyDepthRect(a_context, a_mainDepthSRV, preSnowRect, preSnowDepthUAV.get());
-	globals::profiler->EndPass();
-	preSnowDepthThisFrame = true;
-}
-
-void SnowDeformation::CopyDepthRect(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_mainDepthSRV, const D3D11_BOX& a_box, ID3D11UnorderedAccessView* a_uav)
-{
-	if (a_box.right <= a_box.left || a_box.bottom <= a_box.top)
-		return;
-	ID3D11RenderTargetView* rawRTVs[8] = {};
-	ID3D11DepthStencilView* rawDSV = nullptr;
-	a_context->OMGetRenderTargets(8, rawRTVs, &rawDSV);
-	a_context->OMSetRenderTargets(0, nullptr, nullptr);
-	DepthSyncRectCB rectData{ { a_box.left, a_box.top }, { a_box.right - a_box.left, a_box.bottom - a_box.top } };
-	depthSyncRectCB->Update(rectData);
-	ID3D11Buffer* rectCB = depthSyncRectCB->CB();
-	a_context->CSSetConstantBuffers(2, 1, &rectCB);
-	a_context->CSSetShaderResources(0, 1, &a_mainDepthSRV);
-	a_context->CSSetUnorderedAccessViews(2, 1, &a_uav, nullptr);
-	a_context->CSSetShader(GetPreSnowCopyCS(), nullptr, 0);
-	a_context->Dispatch((rectData.Extent[0] + 7) / 8, (rectData.Extent[1] + 7) / 8, 1);
-	ID3D11ShaderResourceView* nullCopySRV = nullptr;
-	ID3D11UnorderedAccessView* nullCopyUAV = nullptr;
-	ID3D11Buffer* nullCopyCB = nullptr;
-	a_context->CSSetShaderResources(0, 1, &nullCopySRV);
-	a_context->CSSetUnorderedAccessViews(2, 1, &nullCopyUAV, nullptr);
-	a_context->CSSetConstantBuffers(2, 1, &nullCopyCB);
-	a_context->CSSetShader(nullptr, nullptr, 0);
-	a_context->OMSetRenderTargets(8, rawRTVs, rawDSV);
-	for (auto* rtv : rawRTVs) {
-		if (rtv)
-			rtv->Release();
-	}
-	if (rawDSV)
-		rawDSV->Release();
 }
 
 void SnowDeformation::RefreshShellGridPlacement(ShellCB& a_cb, const float4* a_camAdjust)
@@ -737,7 +601,7 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	mainDepth.texture->GetDesc(&mainDesc);
 	if (!shellRasterDepth || shellRasterDepth->desc.Width != mainDesc.Width || shellRasterDepth->desc.Height != mainDesc.Height || !shellTestDepthDSV ||
 		!EnsureDeferredResources() || !EnsureEarlyPrepassResources() || !shellTerrainTexture || !shellTerrainTexture->srv ||
-		!heightBottomFiltered || !heightTopRaw[heightCurrent] || !heightSkinDepth)
+		!heightBottomFiltered)
 		return;
 
 	auto context = globals::d3d::context;
@@ -869,7 +733,6 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	ID3D11ShaderResourceView* fineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
 	ID3D11ShaderResourceView* waterSRVs[2] = { ShellWaterSRV(), waterHeightTexture ? waterHeightTexture->srv.get() : nullptr };
 	ID3D11ShaderResourceView* waterNearSRV = waterNearTexture && waterNearTexture->srv ? waterNearTexture->srv.get() : nullptr;
-	ID3D11ShaderResourceView* objectCapSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
 	ID3D11ShaderResourceView* untouchedSRV = untouchedTilesSRV.get();
 	ID3D11ShaderResourceView* exclusionSRV = GetExclusionFieldSRV();
 	ID3D11SamplerState* snowSampler = shellSnowSampler.get();
@@ -905,7 +768,6 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	context->PSSetConstantBuffers(0, 1, cbs);
 	context->PSSetConstantBuffers(4, 3, sharedBuffers);
 	context->PSSetShaderResources(0, 9, shellSRVs);
-	context->PSSetShaderResources(11, 2, objectCapSRVs);
 	context->PSSetShaderResources(13, 1, &fineSRV);
 	context->PSSetShaderResources(15, 1, &exclusionSRV);
 	context->PSSetShaderResources(19, 1, &waterNearSRV);
@@ -1092,8 +954,6 @@ void SnowDeformation::DrawShell()
 	cbData.CameraPreviousPosAdjust = fb.GetCameraPreviousPosAdjust();
 
 	RefreshShellGridPlacement(cbData);
-	cbData.ShellFlags.y = capturedRoads > 0 ? 1 : 0;
-	cbData.DebugSkinDepth = { settings.SkinDepthBias, settings.SkinSlopeDepthBias, 0.0f, 0.0f };
 
 	cbData.SeamRampInv = 0.0f;
 	int seamMinX, seamMinY, seamMaxX, seamMaxY;
@@ -1113,7 +973,6 @@ void SnowDeformation::DrawShell()
 		std::clamp(settings.ParallaxDepth, 0.0f, 2.0f),
 		0.0f
 	};
-	cbData.SpellShading = { std::max(settings.ScorchStrength, 0.0f), 0.0f, 0.0f, 0.0f };
 	cbData.TrackAge = TrackAgeConstants();
 	const float snowSoftness = GetSnowSoftness();
 	const SnowClimateLook look = ComputeSnowClimateLook();
@@ -1134,12 +993,6 @@ void SnowDeformation::DrawShell()
 	cbData.TrenchDetailCoverage = std::clamp(settings.TrenchDetailCoverage, 0.0f, 2.5f);
 	cbData.TrenchDetailShadow = trenchDetail ? std::clamp(settings.ParallaxDepth, 0.0f, 1.0f) : 0.0f;
 	cbData.SpeedSpoil = trenchDetail && settings.SpeedSpoil ? 1.0f : 0.0f;
-	{
-		const auto& eye = globals::game::shadowState->GetRuntimeData().cameraData.getEye();
-		const float focalPx = 0.5f * static_cast<float>(globals::game::graphicsState->screenHeight) * eye.projMat(1, 1);
-		const float capPx = std::clamp(settings.SkinTessCapPx, 0.0f, 64.0f);
-		cbData.SkinTessCapSlope = (focalPx > 1.0f && capPx > 0.0f) ? capPx / focalPx : 0.0f;
-	}
 	cbData.HasSnowNormal = shellSnowNormalSRV ? 1.0f : 0.0f;
 	cbData.HasSnowRmaos = shellSnowRmaosSRV ? 1.0f : 0.0f;
 	cbData.SnowRoughnessScale = snowRoughnessScale;
@@ -1160,8 +1013,6 @@ void SnowDeformation::DrawShell()
 	}
 	cbData.DebugNoFarPad = 0.0f;
 	cbData.ShellCullBare = shellTerrainTexture ? 1.0f : 0.0f;
-	cbData.SkinFadeEnd = SkinFadeEndUnits();
-	cbData.SkinFadeStart = std::max(cbData.SkinFadeEnd - 2048.0f, 0.0f);
 	cbData.ObjectLiftCap = 0.5f;
 	cbData.ObjectHeightCenter = heightWindowCenter;
 	cbData.ObjectHeightHalfExtent = ObjectRasterHalfExtent();
@@ -1234,28 +1085,13 @@ void SnowDeformation::DrawShell()
 		captureViewCulled = 0;
 	}
 
-	bool rasterReaders = capturedLoaded > 0;
-	if (!rasterReaders) {
-		const auto& eye = globals::game::frameBufferCached.GetCameraPosAdjust();
-		const float reach = ObjectRasterHalfExtent() + 2.0f * ObjectRasterHalfExtent() / kHeightMapDim;
-		auto inWindow = [&](const RE::NiBound& a_b, float a_x, float a_y) {
-			return std::abs(a_b.center.x - a_x) <= reach + a_b.radius && std::abs(a_b.center.y - a_y) <= reach + a_b.radius;
-		};
-		for (const auto& cap : capturedStatics) {
-			const auto& b = cap.geometry->worldBound;
-			if (inWindow(b, eye.x, eye.y) || inWindow(b, heightWindowCenter.x, heightWindowCenter.y)) {
-				rasterReaders = true;
-				break;
-			}
-		}
-	}
-	const bool nothingDraws = !shellGround && !landscapeReads && !rasterReaders && !settings.VolumeSnow;
+	const bool nothingDraws = !shellGround && !landscapeReads && !settings.VolumeSnow;
 	const bool idleInterior = nothingDraws && cascadeReads && interior;
 	if (idleInterior && HeightMapIdleReady())
 		IdleObjectHeightMap();
 	else if (nothingDraws && !idleInterior)
 		SkipObjectHeightMap();
-	else if (!SnowShadersPending(2) && EnsureStaticsShaders())
+	else if (!SnowShadersPending(2) && EnsureHeightRasterShaders())
 		RenderObjectHeightMap();
 	RenderWaterCapture();
 	CoverWaterWindow();
@@ -1290,7 +1126,6 @@ void SnowDeformation::DrawShell()
 	cbData.ExclusionFieldWindow = { exclusionFieldCenter.x, exclusionFieldCenter.y,
 		1.0f / kExclusionFieldHalfExtent,
 		exclusionFieldValid ? 1.0f : 0.0f };
-	cbData.ObjectMeetBand = std::clamp(settings.ObjectMeetBand, 0.0f, 64.0f);
 	if (prevViewportCount)
 		cbData.TessScreen = { ShellTessTargetRenderPx(), prevViewports[0].Width * 0.5f, prevViewports[0].Height * 0.5f, shellDrawViewport.MaxDepth - shellDrawViewport.MinDepth };
 	const auto mapDim = [](const Texture2D* a_tex) { return (a_tex && a_tex->srv) ? float(a_tex->desc.Width) : 0.0f; };
@@ -1302,8 +1137,7 @@ void SnowDeformation::DrawShell()
 	*lastShellCBData = cbData;
 
 	UnbindMarchCaches();
-	const bool marchReaders = shellGround || !capturedStatics.empty();
-	marchIdleFrames = marchReaders ? 0 : std::min(marchIdleFrames + 1, kMarchIdleFrames);
+	marchIdleFrames = shellGround ? 0 : std::min(marchIdleFrames + 1, kMarchIdleFrames);
 	const bool marchIdle = marchIdleFrames >= kMarchIdleFrames;
 	if (marchIdle) {
 		marchCacheValid = false;
@@ -1319,8 +1153,7 @@ void SnowDeformation::DrawShell()
 
 	{
 		auto& masksRT = renderer->GetRuntimeData().renderTargets[MASKS];
-		const bool masksReaders = shellGround || !capturedStatics.empty();
-		if (masksRT.SRV && masksRT.texture && masksReaders) {
+		if (masksRT.SRV && masksRT.texture && shellGround) {
 			context->OMSetRenderTargets(0, nullptr, nullptr);
 			globals::profiler->BeginPass("SnowDeformation::Ground - Depth & Mask Copies");
 			D3D11_TEXTURE2D_DESC masksDesc{};
@@ -1340,23 +1173,6 @@ void SnowDeformation::DrawShell()
 	auto* psPrepass = (fillPS && !early) ? GetShellPSPrepassAttr(keepHidden) : nullptr;
 	const bool ground = fillPS && (early || (psPrepass && LandscapeShadeReady())) && GetShellPSDeferred() &&
 	                    EnsurePrepassResources(mainDepth.depthSRV) && EnsureDeferredResources();
-
-	preSnowDepthThisFrame = false;
-	preSnowDepthDeferred = false;
-	if (shellGround || capturedLoaded > 0 || (settings.VolumeSnow && !capturedStatics.empty())) {
-		auto preDepthSRV = mainDepth.depthSRV;
-		if (preDepthSRV && GetPreSnowCopyCS() && depthSyncRectCB && EnsurePrepassResources(preDepthSRV) && preSnowDepth && preSnowDepthSRV && preSnowDepthUAV) {
-			D3D11_TEXTURE2D_DESC preDesc{};
-			preSnowDepth->GetDesc(&preDesc);
-			preSnowRect = ScreenRectBox(prevViewportCount ? &prevViewports[0] : nullptr, preDesc.Width, preDesc.Height, 0);
-			if (ground && shellRasterDepth && shellRasterDepth->srv)
-				preSnowDepthDeferred = !capturedStatics.empty();
-			else
-				TakePreSnowCopy(context, preDepthSRV);
-		}
-	}
-	if (!preSnowDepthThisFrame && !preSnowDepthDeferred)
-		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Depth & Mask Copies");
 
 	auto& rtData = renderer->GetRuntimeData();
 	ID3D11RenderTargetView* rtvs[8] = {
@@ -1406,8 +1222,8 @@ void SnowDeformation::DrawShell()
 	context->PSSetShaderResources(13, 1, &fineSRV);
 	context->PSSetShaderResources(27, 2, waterSRVs);
 	context->PSSetShaderResources(19, 1, &waterNearSRV);
-	ID3D11ShaderResourceView* objectCapSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(), heightSkinDepth->srv.get() };
-	context->PSSetShaderResources(11, 2, objectCapSRVs);
+	ID3D11ShaderResourceView* objectTopSRV = heightTopRaw[heightCurrent]->srv.get();
+	context->PSSetShaderResources(11, 1, &objectTopSRV);
 	if (landMasksCopySRV) {
 		ID3D11ShaderResourceView* landMasksSRV = landMasksCopySRV.get();
 		context->PSSetShaderResources(10, 1, &landMasksSRV);
@@ -1574,12 +1390,9 @@ void SnowDeformation::DrawShell()
 		context->OMSetDepthStencilState(shellDepthState.get(), 0);
 		globals::profiler->EndPass();
 	}
-	if (auto* skinRaster = GetSkinRasterState())
-		context->RSSetState(skinRaster);
 	const bool rasterMarks = ground && shellRasterDepth && shellRasterDepth->srv;
 	shellGroundMarksSRV = rasterMarks ? (earlyMarks ? shellEarlyMarks->srv.get() : shellRasterDepth->srv.get()) : nullptr;
-	DrawCapturedStatics();
-	context->RSSetState(shellRasterState.get());
+	CreateCaptureLayouts();
 
 	{
 		ID3D11ShaderResourceView* nullDSSRVs[24] = {};
@@ -1632,16 +1445,16 @@ void SnowDeformation::DrawShell()
 	globals::game::stateUpdateFlags->set(RE::BSGraphics::ShaderFlags::DIRTY_RENDERTARGET);
 
 	auto& tb = globals::features::terrainBlending;
-	const bool syncable = rasterMarks || preSnowDepthThisFrame;
+	const bool syncable = rasterMarks;
 	if (!syncable)
 		globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Depth & Mask Copies");
 	if (syncable && tb.loaded && tb.settings.Enabled && tb.blendedDepthTexture && tb.blendedDepthTexture16) {
-		if (auto cs = GetSnowCS(kDepthSyncCS); cs && GetPreSnowCopyCS() && depthSyncRectCB) {
+		if (auto cs = GetSnowCS(kDepthSyncCS); cs && DepthSyncRectBuffer()) {
 			auto mainDepthSRV = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
 			ID3D11UnorderedAccessView* syncUAVs[2] = { tb.blendedDepthTexture->uav.get(), tb.blendedDepthTexture16->uav.get() };
 			ID3D11ShaderResourceView* syncSRVs[3] = { mainDepthSRV,
 				shellGroundMarksSRV,
-				preSnowDepthThisFrame ? preSnowDepthSRV.get() : nullptr };
+				nullptr };
 			const auto& depthDesc = tb.blendedDepthTexture->desc;
 			const D3D11_BOX rect = ScreenRectBox(prevViewportCount ? &prevViewports[0] : nullptr, depthDesc.Width, depthDesc.Height, 0);
 			DepthSyncRectCB rectData{ { rect.left, rect.top }, { rect.right - rect.left, rect.bottom - rect.top } };

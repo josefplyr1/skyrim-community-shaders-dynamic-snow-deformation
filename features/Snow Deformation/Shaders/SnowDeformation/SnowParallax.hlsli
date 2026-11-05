@@ -59,14 +59,6 @@ float SampleSnowHeight(SnowTaps taps, float2 uvOffset, float mip)
 
 #ifdef PSHADER
 
-SnowTaps ComputeSnowTaps(float2 uv, float2 worldXY)
-{
-	SnowTaps taps = ComputeSnowTapsNoGrad(uv, worldXY);
-	taps.duvdx = ddx(uv);
-	taps.duvdy = ddy(uv);
-	return taps;
-}
-
 float4 SampleSnowMap(Texture2D<float4> tex, SnowTaps taps)
 {
 	return taps.weights.x * tex.SampleGrad(SnowSampler, taps.uv0, taps.duvdx, taps.duvdy) +
@@ -80,16 +72,6 @@ float SnowHeightMipGrad(float2 duvdx, float2 duvdy)
 	SnowHeightMap.GetDimensions(dims.x, dims.y);
 	float2 dx = duvdx * dims;
 	float2 dy = duvdy * dims;
-	return floor(max(0.5 * log2(max(min(dot(dx, dx), dot(dy, dy)), 1e-8)) + SharedData::MipBias, 0.0));
-}
-
-float SnowHeightMip(float2 uv)
-{
-	float2 dims;
-	SnowHeightMap.GetDimensions(dims.x, dims.y);
-	float2 texels = uv * dims;
-	float2 dx = ddx(texels);
-	float2 dy = ddy(texels);
 	return floor(max(0.5 * log2(max(min(dot(dx, dx), dot(dy, dy)), 1e-8)) + SharedData::MipBias, 0.0));
 }
 

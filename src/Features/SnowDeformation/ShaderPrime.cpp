@@ -33,18 +33,12 @@ void SnowDeformation::RunShaderPrime()
 		[&] { GetShellPSDeferred(); },
 		[&] { GetSnowCS(kNoiseHashCS); },
 		[&] { GetShellFillVS(); },
-		[&] { GetShellFillRectVS(); },
 		[&] { GetShellFillPS(); },
 		[&] { GetShellFillPSClaim(); },
-		[&] { GetShellFillPSPreSnow(); },
 		[&] { GetSnowCS(kShellTerrainCutCS); },
 		[&] { GetSnowCS(kDepthSyncCS); },
-		[&] { GetPreSnowCopyCS(); },
 		[&] { GetSnowCS(kSssSyncCS); },
 		[&] { GetSnowCS(kSssRestoreCS); },
-		[&] { GetHiZBuildCS(); },
-		[&] { GetSnowCS(kSkinCullCS); },
-		[&] { GetSnowCS(kClusterCullCS); },
 		[&] { GetSnowCS(kTerrainFineCS); },
 		[&] { GetSnowCS(kExclusionFieldCS); },
 		[&] { GetSnowCS(kBermFieldTiledCS); },
@@ -63,8 +57,7 @@ void SnowDeformation::RunShaderPrime()
 		[&] { GetSnowCS(kWindowFillCS); },
 	};
 	const std::function<void()> objectSteps[] = {
-		[&] { EnsureStaticsShaders(); },
-		[&] { EnsureSmoothNormalsCS(); },
+		[&] { EnsureHeightRasterShaders(); },
 	};
 	const std::function<void()> effectSteps[] = {
 		[] {},

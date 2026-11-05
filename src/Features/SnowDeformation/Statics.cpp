@@ -2,27 +2,13 @@
 #include "Features/SnowDeformation.h"
 #include "Features/SnowDeformation/DevSwitches.h"
 
-#include <d3dcompiler.h>
-
-#include "Deferred.h"
-#include "Features/ExponentialHeightFog.h"
-#include "Features/ExtendedMaterials.h"
-#include "Features/IBL.h"
 #include "Globals.h"
 #include "ShaderCache.h"
 #include "State.h"
-#include "TruePBR/BSLightingShaderMaterialPBR.h"
 #include "Utils/D3D.h"
 #include "Utils/Format.h"
 
 #include <bit>
-
-static ID3D11ShaderResourceView* SD_ProjNoiseMapSRV()
-{
-	auto* graphicsState = globals::game::graphicsState;
-	auto* noiseTex = graphicsState ? graphicsState->defaultTextureProjNoiseMap.get() : nullptr;
-	return (noiseTex && noiseTex->rendererTexture) ? noiseTex->rendererTexture->resourceView : nullptr;
-}
 
 static bool HasActiveLight(RE::NiAVObject* a_obj)
 {
@@ -82,16 +68,12 @@ struct GeometryNameFacts
 	bool bridge = false;
 	bool road = false;
 	bool mountainCliff = false;
-	bool plank = false;
 	bool iceFamily = false;
 	bool drift = false;
 	bool lodNotSnow = false;
 	bool bloodPool = false;
 	bool engineDecal = false;
 	bool capturedLogged = false;
-	bool roundedLogged = false;
-	bool plankLogged = false;
-	bool decalLogged = false;
 	bool lodVetoLogged = false;
 };
 
@@ -185,7 +167,6 @@ static GeometryNameFacts& NameFactsOf(RE::BSGeometry* a_geometry)
 		f.bridge = ContainsNoCase(name, "bridge");
 		f.road = ContainsNoCase(name, "road");
 		f.mountainCliff = ContainsNoCase(name, "mountain") || ContainsNoCase(name, "cliff");
-		f.plank = ContainsNoCase(name, "plank") || ContainsNoCase(name, "walkway") || ContainsNoCase(name, "catwalk");
 		f.iceFamily = (std::tolower((unsigned char)name[0]) == 'i' && std::tolower((unsigned char)name[1]) == 'c' && std::tolower((unsigned char)name[2]) == 'e') ||
 		              ContainsNoCase(name, "glacier") || ContainsNoCase(name, "iceberg");
 		f.drift = ContainsNoCase(name, "drift") && !ContainsNoCase(name, "driftwood");
@@ -210,8 +191,6 @@ struct SD_DrawBinds
 	UINT stride = 0;
 	ID3D11Buffer* ib = nullptr;
 	DXGI_FORMAT ibFormat = DXGI_FORMAT_UNKNOWN;
-	bool smoothBound = false;
-	ID3D11ShaderResourceView* smooth = nullptr;
 
 	void Layout(ID3D11DeviceContext* a_context, ID3D11InputLayout* a_layout)
 	{
@@ -236,14 +215,6 @@ struct SD_DrawBinds
 		a_context->IASetIndexBuffer(a_ib, a_format, 0);
 		ib = a_ib;
 		ibFormat = a_format;
-	}
-	void Smooth(ID3D11DeviceContext* a_context, ID3D11ShaderResourceView* a_srv)
-	{
-		if (smoothBound && smooth == a_srv)
-			return;
-		a_context->VSSetShaderResources(10, 1, &a_srv);
-		smooth = a_srv;
-		smoothBound = true;
 	}
 };
 
@@ -638,40 +609,7 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 	}
 }
 
-void SnowDeformation::CapturePreDecalMasks()
-{
-	auto* context = globals::d3d::context;
-	auto* renderer = globals::game::renderer;
-	if (!renderer)
-		return;
-	auto* masksSRV = renderer->GetRuntimeData().renderTargets[MASKS].SRV;
-	if (!masksSRV)
-		return;
-	ID3D11RenderTargetView* rtvs[8]{};
-	ID3D11DepthStencilView* dsv = nullptr;
-	context->OMGetRenderTargets(8, rtvs, &dsv);
-	context->OMSetRenderTargets(0, nullptr, nullptr);
-	UINT vpCount = 1;
-	D3D11_VIEWPORT vp{};
-	context->RSGetViewports(&vpCount, &vp);
-	winrt::com_ptr<ID3D11Resource> masksRes;
-	masksSRV->GetResource(masksRes.put());
-	D3D11_TEXTURE2D_DESC masksDesc{};
-	if (auto masksTex = masksRes.try_as<ID3D11Texture2D>())
-		masksTex->GetDesc(&masksDesc);
-	const D3D11_BOX masksBox = ScreenRectBox(vpCount ? &vp : nullptr, masksDesc.Width, masksDesc.Height, 1);
-	globals::profiler->BeginPass("SnowDeformation::Ground - Depth & Mask Copies");
-	CopySRVResource(masksSRV, "SnowDeformation::PreDecalMasks", preDecalMasksTex, preDecalMasksSRV, &masksBox);
-	globals::profiler->EndPass();
-	context->OMSetRenderTargets(8, rtvs, dsv);
-	for (auto* rtv : rtvs)
-		if (rtv)
-			rtv->Release();
-	if (dsv)
-		dsv->Release();
-}
-
-void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, uint32_t a_rawTechnique)
+void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 {
 	if (!a_pass || !a_pass->shaderProperty || !a_pass->geometry)
 		return;
@@ -679,16 +617,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 		return;
 	if (!globals::state->inWorld)
 		return;
-
-	if (preDecalMasksFrame != globals::state->frameCount &&
-		!(globals::state->permutationData.ExtraShaderDescriptor & static_cast<uint32_t>(State::ExtraShaderDescriptors::IsReflections))) {
-		using DecalFlag = RE::BSShaderProperty::EShaderPropertyFlag;
-		const auto biasMode = globals::game::shadowState->GetRuntimeData().rasterStateDepthBiasMode;
-		if (biasMode != 0 || a_pass->shaderProperty->flags.any(DecalFlag::kDecal, DecalFlag::kDynamicDecal)) {
-			preDecalMasksFrame = globals::state->frameCount;
-			CapturePreDecalMasks();
-		}
-	}
 
 	auto& rec = RecordOf(a_pass->geometry, static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material));
 	const auto& passFacts = NameFactsOf(a_pass->geometry);
@@ -720,7 +648,8 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 	auto eye = globals::game::frameBufferCached.GetCameraPosAdjust();
 
 	auto& nameFacts = NameFactsOf(a_pass->geometry);
-	const bool lodBatch = flags.any(Flag::kLODObjects, Flag::kHDLODObjects);
+	if (flags.any(Flag::kLODObjects, Flag::kHDLODObjects))
+		return;
 	const uint32_t depthBiasMode = globals::game::shadowState->GetRuntimeData().rasterStateDepthBiasMode;
 	const bool decalDepth = depthBiasMode != 0 || flags.any(Flag::kDecal, Flag::kDynamicDecal);
 	const bool snowTexOverlay = settings.SnowTexturedRecolor && rec.pathSnowNamed && PassBlendsOver(a_pass);
@@ -735,7 +664,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 			if (!referenced)
 				referenced = GeometryBelongsToLoadedReference(a_pass->geometry);
 			const bool iceSheet = rec.pathNatural;
-			if (!referenced && !iceSheet && !lodBatch) {
+			if (!referenced && !iceSheet) {
 				SampleLODDecision(a_pass->geometry, wb.radius, true, false);
 				return;
 			}
@@ -747,8 +676,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 		auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
 		if (!material)
 			return;
-
-		const bool isObjectLOD = flags.any(Flag::kLODObjects, Flag::kHDLODObjects);
 
 		const auto& wbCenter = a_pass->geometry->worldBound.center;
 		bool mountainFeature = rec.pathMountain || nameFacts.mountainCliff;
@@ -764,7 +691,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 		}
 		const bool naturalFeature = rec.pathNatural || rec.iceName || mountainFeature;
 		const bool snowNamedCapture = settings.SnowTexturedRecolor && rec.pathSnowNamed && !snowTexOverlay;
-		if (!(rec.pathBase || naturalFeature || isObjectLOD || snowNamedCapture || rec.roadLayer)) {
+		if (!(rec.pathBase || naturalFeature || snowNamedCapture || rec.roadLayer)) {
 			return;
 		}
 	}
@@ -774,7 +701,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 	}
 	auto* alphaProperty = a_pass->geometry->GetGeometryRuntimeData().alphaProperty.get();
 	const bool alphaTested = alphaProperty && alphaProperty->GetAlphaTesting();
-	if (!lodBatch && !decalDepth && !rec.pathArchitecture && alphaTested && !rec.roadLayer) {
+	if (!decalDepth && !rec.pathArchitecture && alphaTested && !rec.roadLayer) {
 		return;
 	}
 
@@ -803,7 +730,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 	const auto& rangeBound = a_pass->geometry->worldBound;
 	float dx = rangeBound.center.x - eye.x;
 	float dy = rangeBound.center.y - eye.y;
-	const float captureRange = SkinFadeEndUnits() + std::max(rangeBound.radius, 0.0f);
+	const float captureRange = kMaxRangeSkinsM * kUnitsPerMeter + std::max(rangeBound.radius, 0.0f);
 	if (!fadeExempt && !fullCoat && !road && dx * dx + dy * dy > captureRange * captureRange) {
 		return;
 	}
@@ -824,87 +751,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 			a_pass->geometry->name.c_str(), road ? "yes" : "no", roadVia, diffusePath);
 	}
 
-	float projThreshold = -1.0f;
-	float projNoiseScale = 0.0f;
-	float projNoiseTiling = 0.0f;
-	float projNoiseWeight = 0.0f;
-	bool projReal = false;
-	{
-		const auto& capFlags = a_pass->shaderProperty->flags;
-		using CapFlag = RE::BSShaderProperty::EShaderPropertyFlag;
-		if (capFlags.any(CapFlag::kProjectedUV) && !capFlags.any(CapFlag::kTreeAnim)) {
-			const auto& projParams = static_cast<RE::BSLightingShaderProperty*>(a_pass->shaderProperty)->projectedUVParams;
-			projThreshold = projParams.alpha;
-			projNoiseWeight = projParams.red * (1.0f - projParams.alpha);
-			if (rec.seasonsProj)
-				projThreshold = std::max(projThreshold, std::cos(std::clamp(settings.SeasonsSnowMaxAngle, 0.0f, 90.0f) * (DirectX::XM_PI / 180.0f)));
-			projNoiseScale = projParams.red;
-			projNoiseTiling = projParams.blue;
-			projReal = true;
-		} else if (!capFlags.any(CapFlag::kTreeAnim) && !fadeExempt) {
-			projThreshold = 0.0f;
-		}
-	}
-
-	const bool forceRounded = nameFacts.mountainCliff;
-	if (decalDepth && !nameFacts.decalLogged) {
-		nameFacts.decalLogged = true;
-		logger::info("[SNOW DEFORMATION] decal depth mode {} (decal flags {}): '{}'", depthBiasMode, flags.any(Flag::kDecal, Flag::kDynamicDecal) ? 1 : 0, a_pass->geometry->name.c_str());
-	}
-	if (forceRounded && !nameFacts.roundedLogged) {
-		nameFacts.roundedLogged = true;
-		logger::info("[SNOW DEFORMATION] forced ROUNDED class (mountain/cliff family): '{}'", a_pass->geometry->name.c_str());
-	}
-	const bool plankFamily = nameFacts.plank;
-	if (plankFamily && !nameFacts.plankLogged) {
-		nameFacts.plankLogged = true;
-		logger::info("[SNOW DEFORMATION] plank family (flat class in authored relief): '{}'", a_pass->geometry->name.c_str());
-	}
-
-	const bool snowTex = settings.SnowTexturedRecolor && !projReal && !lodBatch && rec.pathSnowNamed && !snowTexOverlay;
-	winrt::com_ptr<ID3D11ShaderResourceView> parallaxSRV;
-	float4 parallaxUV = {};
-	float4 parallax = {};
-	if (settings.SnowFollowsParallax && !lodBatch && globals::features::extendedMaterials.loaded) {
-		const auto& em = globals::features::extendedMaterials.settings;
-		auto* material = static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material);
-		RE::NiSourceTexture* height = nullptr;
-		using LightingTechnique = SIE::ShaderCache::LightingShaderTechniques;
-		const auto technique = static_cast<LightingTechnique>(0x3F & (a_rawTechnique >> 24));
-		const bool truePbr = (a_rawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::TruePbr)) != 0;
-		if (material && truePbr && (technique == LightingTechnique::None || technique == LightingTechnique::TreeAnim)) {
-			auto* pbr = static_cast<BSLightingShaderMaterialPBR*>(material);
-			if (em.EnableParallax && pbr->displacementTexture != nullptr && pbr->displacementTexture != globals::game::graphicsState->GetRuntimeData().defaultTextureBlack &&
-				!pbr->pbrFlags.any(PBRFlags::InterlayerParallax)) {
-				height = pbr->displacementTexture.get();
-				parallax = { pbr->GetDisplacementScale(), 0.0f, 2.0f, 1.0f };
-			}
-		} else if (material && !truePbr && technique == LightingTechnique::Envmap && material->GetFeature() == RE::BSShaderMaterial::Feature::kEnvironmentMap &&
-				   (a_rawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ModelSpaceNormals)) == 0) {
-			auto* envmap = static_cast<RE::BSLightingShaderMaterialEnvmap*>(material);
-			if (em.EnableComplexMaterial && envmap->envMaskTexture) {
-				height = envmap->envMaskTexture.get();
-				parallax = { 1.0f, 3.0f, 1.0f, 0.0f };
-			}
-		}
-		if (height && height->rendererTexture && height->rendererTexture->resourceView) {
-			parallaxSRV.copy_from(height->rendererTexture->resourceView);
-			const uint32_t transform = globals::game::smState->textureTransformCurrentBuffer;
-			parallaxUV = { material->texCoordOffset[transform].x, material->texCoordOffset[transform].y,
-				material->texCoordScale[transform].x, material->texCoordScale[transform].y };
-		}
-	}
-	const bool mayParallax = parallaxSRV != nullptr;
-	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road, fadeExempt || fullCoat || road, projThreshold, projNoiseScale, projNoiseTiling, projNoiseWeight, forceRounded, plankFamily, projReal, fullCoat, lodBatch, decalDepth, alphaTested, snowTex, rec.mato != MatoClass::kNotSnow, mayParallax });
-	capturedStatics.back().parallaxSRV = std::move(parallaxSRV);
-	capturedStatics.back().parallaxUV = parallaxUV;
-	capturedStatics.back().parallax = parallax;
-	capturedRoads += road ? 1u : 0u;
-	capturedLoaded += lodBatch ? 0u : 1u;
-	if (!lodBatch) {
-		const auto& wb = a_pass->geometry->worldBound;
-		coatReachBounds[0].push_back({ wb.center.x, wb.center.y, wb.radius });
-	}
+	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road || flags.any(Flag::kProjectedUV) || !fadeExempt });
 }
 
 struct SD_BSLightingShader_SetupGeometry
@@ -919,7 +766,7 @@ struct SD_BSLightingShader_SetupGeometry
 		func(shader, a_pass, a_flags);
 
 		if (snowDeformation.loaded) {
-			snowDeformation.BSLightingShader_SetupGeometry(a_pass, shader ? shader->currentRawTechnique : 0);
+			snowDeformation.BSLightingShader_SetupGeometry(a_pass);
 			snowDeformation.LandscapeSnowSetup(a_pass, true);
 		}
 	}
@@ -943,100 +790,16 @@ ID3D11DeviceChild* SD_CompileShader(const wchar_t* a_path, const char* a_target,
 	return Util::CompileShader(a_path, defines, a_target, "main", a_blob ? a_blob->put() : nullptr);
 }
 
-bool SnowDeformation::RoadMapsWanted() const
+bool SnowDeformation::EnsureHeightRasterShaders()
 {
-	return capturedRoads > 0;
-}
-
-float2 SnowDeformation::PatchLatticeCentre() const
-{
-	return { std::floor(heightWindowCenter.x / kPatchSnap) * kPatchSnap, std::floor(heightWindowCenter.y / kPatchSnap) * kPatchSnap };
-}
-
-void SnowDeformation::FillPatchDrawCB(StaticsCB& a_scb) const
-{
-	const float2 centre = PatchLatticeCentre();
-	a_scb.WorldRow0 = { centre.x, centre.y, 0.0f, 0.0f };
-	a_scb.ObjectsDepth = 0.0f;
-	a_scb.RoundedDepth = 0.0f;
-	a_scb.FadeExempt = 1.0f;
-	a_scb.HeightWindowCenter = heightWindowCenter;
-	a_scb.HeightHalfExtent = ObjectRasterHalfExtent();
-	a_scb.FineHalfExtent = 0.0f;
-	a_scb.FarWindowCenterX = farWindowCenter.x;
-	a_scb.FarWindowCenterY = farWindowCenter.y;
-	a_scb.FarHalfExtent = farHalfExtentLive;
-	a_scb.FarRoadDepth = settings.RoadMeshesDepth;
-	a_scb.HasObjectTop = 1.0f;
-	a_scb.RoadField = 1.0f;
-}
-
-bool SnowDeformation::EnsureStaticsShaders()
-{
-	if (staticsVS && staticsPS)
-		return true;
-	if (staticsVS && staticsPS)
+	if (heightVS && heightPS && heightScrollRasterCS && heightCombineCS)
 		return true;
 	if (staticsShadersFailed)
 		return false;
 
-	constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl";
-
-	if (!staticsVS) {
-		staticsVS.attach(static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", {}, &staticsVSBlob)));
-		if (staticsVS)
-			Util::SetResourceName(staticsVS.get(), "SnowDeformation::StaticsShellVS");
-	}
-	if (!staticsTessVS) {
-		staticsTessVS.attach(static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "SNOW_TESS" })));
-		if (staticsTessVS)
-			Util::SetResourceName(staticsTessVS.get(), "SnowDeformation::StaticsShellTessVS");
-	}
-	if (!staticsHS) {
-		staticsHS.attach(static_cast<ID3D11HullShader*>(SD_CompileShader(path, "hs_5_0")));
-		if (staticsHS)
-			Util::SetResourceName(staticsHS.get(), "SnowDeformation::StaticsShellHS");
-	}
-	if (!staticsDS) {
-		staticsDS.attach(static_cast<ID3D11DomainShader*>(SD_CompileShader(path, "ds_5_0")));
-		if (staticsDS)
-			Util::SetResourceName(staticsDS.get(), "SnowDeformation::StaticsShellDS");
-	}
-	const char* ehfDefine = globals::features::exponentialHeightFog.loaded ? "SNOW_EXP_HEIGHT_FOG" : nullptr;
-	const char* iblDefine = globals::features::ibl.loaded ? "SNOW_IBL" : nullptr;
-
-	if (!staticsPS) {
-		staticsPS.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine })));
-		if (staticsPS)
-			Util::SetResourceName(staticsPS.get(), "SnowDeformation::StaticsShellPS");
-	}
-
-	if (!staticsPSNoDepth) {
-		staticsPSNoDepth.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT" })));
-		if (staticsPSNoDepth)
-			Util::SetResourceName(staticsPSNoDepth.get(), "SnowDeformation::StaticsShellPS NoDepth");
-	}
-
-	if (!staticsPSPrepassNoDepth) {
-		staticsPSPrepassNoDepth.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DEPTH_PREPASS" })));
-		if (staticsPSPrepassNoDepth)
-			Util::SetResourceName(staticsPSPrepassNoDepth.get(), "SnowDeformation::StaticsShellPS Prepass NoDepth");
-	}
-
-	if (!staticsPSDrapeNoDepth) {
-		staticsPSDrapeNoDepth.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE" })));
-		if (staticsPSDrapeNoDepth)
-			Util::SetResourceName(staticsPSDrapeNoDepth.get(), "SnowDeformation::StaticsShellPS Drape NoDepth");
-	}
-	if (!staticsPSDrapePrepass) {
-		staticsPSDrapePrepass.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DEPTH_PREPASS", "SNOW_STATICS_DRAPE" })));
-		if (staticsPSDrapePrepass)
-			Util::SetResourceName(staticsPSDrapePrepass.get(), "SnowDeformation::StaticsShellPS Drape Prepass");
-	}
-
 	constexpr auto heightPath = L"Data\\Shaders\\SnowDeformation\\SnowHeightCapture.hlsl";
 	if (!heightVS) {
-		heightVS.attach(static_cast<ID3D11VertexShader*>(SD_CompileShader(heightPath, "vs_5_0")));
+		heightVS.attach(static_cast<ID3D11VertexShader*>(SD_CompileShader(heightPath, "vs_5_0", {}, &heightVSBlob)));
 		if (heightVS)
 			Util::SetResourceName(heightVS.get(), "SnowDeformation::HeightCaptureVS");
 	}
@@ -1045,47 +808,31 @@ bool SnowDeformation::EnsureStaticsShaders()
 		if (heightPS)
 			Util::SetResourceName(heightPS.get(), "SnowDeformation::HeightCapturePS");
 	}
-	if (!heightPeelPS) {
-		heightPeelPS.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(heightPath, "ps_5_0", { "PEEL" })));
-		if (heightPeelPS)
-			Util::SetResourceName(heightPeelPS.get(), "SnowDeformation::HeightPeelPS");
-	}
-	if (!heightPSTopOnly) {
-		heightPSTopOnly.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(heightPath, "ps_5_0", { "TOP_ONLY" })));
-		if (heightPSTopOnly)
-			Util::SetResourceName(heightPSTopOnly.get(), "SnowDeformation::HeightCapturePS TopOnly");
-	}
-	if (!heightPSSkinDepth) {
-		heightPSSkinDepth.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(heightPath, "ps_5_0", { "SKIN_DEPTH" })));
-		if (heightPSSkinDepth)
-			Util::SetResourceName(heightPSSkinDepth.get(), "SnowDeformation::HeightCapturePS SkinDepth");
-	}
 	constexpr auto processPath = L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl";
-	if (!heightScrollCS)
-		heightScrollCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ScrollCS")));
-	if (!heightScrollTopCS)
-		heightScrollTopCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, { { "SCROLL_TOP_ONLY", "" } }, "cs_5_0", "ScrollCS")));
 	if (!heightScrollRasterCS)
-		heightScrollRasterCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, { { "SCROLL_RASTER_RG", "" } }, "cs_5_0", "ScrollCS")));
+		heightScrollRasterCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ScrollCS")));
 	if (!heightCombineCS)
 		heightCombineCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "CombineCS")));
 	if (!heightWaterCoverCS)
 		heightWaterCoverCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "WaterCoverCS")));
-	if (!objectConeSeedCS)
-		objectConeSeedCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ObjectConeSeedCS"));
-	if (!objectConeCS)
-		objectConeCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ObjectConeCS"));
-	if (!objectConeDiffuseCS)
-		objectConeDiffuseCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ObjectConeDiffuseCS")));
-	if (!objectConeFusedCS)
-		objectConeFusedCS = static_cast<ID3D11ComputeShader*>(Util::CompileShader(processPath, {}, "cs_5_0", "ConeFusedCS"));
 
-	if (!staticsVS || !staticsPS || !heightVS || !heightPS || !heightPSSkinDepth || !heightScrollCS || !heightScrollRasterCS || !heightCombineCS) {
+	if (!heightVS || !heightPS || !heightScrollRasterCS || !heightCombineCS) {
 		staticsShadersFailed = true;
-		logger::warn("[SNOW DEFORMATION] Statics skin disabled (shader compilation failed)");
+		logger::warn("[SNOW DEFORMATION] Object height raster disabled (shader compilation failed)");
 		return false;
 	}
 	return true;
+}
+
+void SnowDeformation::CreateCaptureLayouts()
+{
+	if (SnowShadersPending(2) || capturedStatics.empty() || globals::state->isMapMenuOpen || !EnsureHeightRasterShaders())
+		return;
+	for (const auto& cap : capturedStatics) {
+		RigidDraw draw;
+		if (cap.makesLayout && cap.geometry && RigidDrawOf(cap.geometry.get(), draw))
+			StaticsInputLayoutFor(draw.descKey, draw.desc);
+	}
 }
 
 void SnowDeformation::CreateHeightFieldResources()
@@ -1099,21 +846,15 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightBottomRaw[1] = makeHeightTexture("SnowDeformation::HeightBottomRaw1");
 	heightRaster = SD_MakeTexture2D(kHeightMapDim, kHeightMapDim, DXGI_FORMAT_R32G32_FLOAT, "SnowDeformation::HeightRaster", D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET);
 	heightBottomFiltered = SD_MakeTexture2D(kHeightMapDim, kHeightMapDim, DXGI_FORMAT_R16G16_FLOAT, "SnowDeformation::HeightShelterMask", D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET | D3D11_BIND_UNORDERED_ACCESS);
-	objectSnowCone = makeHeightTexture("SnowDeformation::ObjectSnowCone");
-	heightTop2Raw[0] = makeHeightTexture("SnowDeformation::HeightTop2Raw0");
-	heightTop2Raw[1] = makeHeightTexture("SnowDeformation::HeightTop2Raw1");
-	heightTopRawFine = makeHeightTexture("SnowDeformation::HeightTopRawFine");
-	heightTopRawFar = makeHeightTexture("SnowDeformation::HeightTopRawFar");
 	static_assert(kHeightMapDim % 8 == 0, "HeightMapProcessCS clamps tiles to dims / 8");
 	heightTileEmpty = SD_MakeTexture2D(kHeightMapDim / 8, kHeightMapDim / 8, DXGI_FORMAT_R8_UINT, "SnowDeformation::HeightTileEmpty");
-	heightSkinDepth = SD_MakeTexture2D(kHeightMapDim, kHeightMapDim, DXGI_FORMAT_R32G32_FLOAT, "SnowDeformation::HeightSkinDepth", D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET);
 }
 
 static constexpr UINT kHeightVerifySamples = 8;
 static constexpr UINT kHeightVerifySlotWords = 4 + kHeightVerifySamples * 8;
 static_assert(kHeightVerifySlotWords * sizeof(uint32_t) % D3D11_RAW_UAV_SRV_BYTE_ALIGNMENT == 0);
 static constexpr UINT kHeightVerifySlots = 7;
-static constexpr UINT kHeightVerifyRasterSlots = 4;
+static constexpr UINT kHeightVerifyRasterSlots = 1;
 static constexpr uint32_t kHeightVerifyTargetLevel[kHeightVerifySlots] = { 0, 0, 1, 2, 3, 4, 5 };
 
 bool SnowDeformation::EnsureHeightRasterVerify()
@@ -1123,11 +864,10 @@ bool SnowDeformation::EnsureHeightRasterVerify()
 	auto device = globals::d3d::device;
 	if (!heightRasterCompareCS)
 		heightRasterCompareCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl", { { "RASTER_COMPARE", "" } }, "cs_5_0", "RasterCompareCS")));
-	if (!heightRasterCompareCS || !heightRaster || !heightSkinDepth || !heightTopRawFine || !heightTopRawFar)
+	if (!heightRasterCompareCS || !heightRaster)
 		return false;
-	Texture2D* const twins[kHeightVerifyRasterSlots] = { heightRaster, heightSkinDepth, heightTopRawFine, heightTopRawFar };
-	static constexpr const char* kNames[kHeightVerifyRasterSlots] = { "SnowDeformation::HeightVerifyRaster", "SnowDeformation::HeightVerifySkinDepth",
-		"SnowDeformation::HeightVerifyFine", "SnowDeformation::HeightVerifyFar" };
+	Texture2D* const twins[kHeightVerifyRasterSlots] = { heightRaster };
+	static constexpr const char* kNames[kHeightVerifyRasterSlots] = { "SnowDeformation::HeightVerifyRaster" };
 	for (UINT i = 0; i < kHeightVerifyRasterSlots; i++) {
 		if (heightRasterVerifyTex[i])
 			continue;
@@ -1180,22 +920,6 @@ bool SnowDeformation::EnsureHeightRasterVerify()
 			return false;
 		Util::SetResourceName(heightRasterVerifyStaging[i].get(), "SnowDeformation::HeightVerifyStaging");
 	}
-	return true;
-}
-
-bool SnowDeformation::EnsureConeVerify()
-{
-	if (coneVerifyTex)
-		return true;
-	if (!objectSnowCone)
-		return false;
-	D3D11_TEXTURE2D_DESC desc = objectSnowCone->desc;
-	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = { .Format = desc.Format, .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D, .Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 } };
-	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = { .Format = desc.Format, .ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D, .Texture2D = { .MipSlice = 0 } };
-	coneVerifyTex = new Texture2D(desc, "SnowDeformation::ConeVerify");
-	coneVerifyTex->CreateSRV(srvDesc);
-	coneVerifyTex->CreateUAV(uavDesc);
 	return true;
 }
 
@@ -1363,15 +1087,11 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.ClearAll = heightMapValid ? 0u : 1u;
 	processData.HeightWindowCenter = newCenter;
 	processData.HeightHalfExtent = halfExtent;
-	processData.SlopePerUnit = kObjectConeSlope;
 	constexpr float shellCellSize = kShellVertexSpacing * kShellTexelsPerCell;
 	processData.TerrainWindowOrigin = { shellWindowCellX * shellCellSize, shellWindowCellY * shellCellSize };
 	processData.TerrainTexelSize = kShellVertexSpacing;
 	processData.TerrainDim = kShellWindowDim;
 	processData.GhostDecay = 0.5f;
-	processData.RimStep = kRimStep;
-	processData.OverheadIgnore = kOverheadIgnore;
-	processData.DiffuseLambda = kDiffuseLambda;
 	processData.ShelterMaxHeight = std::clamp(settings.ShelterMaxHeight, 100.0f, 2000.0f);
 	processData.ShelterBandHeight = std::max(kShelterBandHeight, processData.ShelterMaxHeight);
 	processData.ShelterConeTan = std::tan(std::clamp(settings.ShelterDriftAngle, 5.0f, 70.0f) * (DirectX::XM_PI / 180.0f));
@@ -1428,9 +1148,9 @@ void SnowDeformation::RenderObjectHeightMap()
 		       std::abs(wb.center.y - heightWindowCenter.y) > a_halfExtent + wb.radius;
 	};
 	const bool emptyWindow = !heightGhostsLive && std::ranges::none_of(capturedStatics, [&](const auto& a_cap) {
-		return a_cap.geometry && !a_cap.lodBatch && !outsideWindow(a_cap.geometry.get(), halfExtent);
+		return a_cap.geometry && !outsideWindow(a_cap.geometry.get(), halfExtent);
 	});
-	const bool keepEmpty = emptyWindow && heightMapsEmpty && !processData.ClearAll && !heightRasterCacheOff && !coneVerify;
+	const bool keepEmpty = emptyWindow && heightMapsEmpty && !processData.ClearAll && !heightRasterCacheOff;
 
 	uint previous = heightCurrent;
 	if (!keepEmpty)
@@ -1448,30 +1168,22 @@ void SnowDeformation::RenderObjectHeightMap()
 		heightGhostCB->Update(ghostData);
 	}
 	ID3D11Buffer* ghostCB = heightGhostCB->CB();
-	auto mergeGhost = [&](Texture2D* a_prevTop, Texture2D* a_curTop, Texture2D* a_prevBottom, Texture2D* a_curBottom, Texture2D* a_tiles,
-						  Texture2D* a_raster = nullptr) {
-		if (!a_prevTop || !a_curTop)
+	auto mergeGhost = [&](Texture2D* a_prevTop, Texture2D* a_curTop, Texture2D* a_prevBottom, Texture2D* a_curBottom, Texture2D* a_tiles, Texture2D* a_raster) {
+		if (!a_prevTop || !a_curTop || !a_prevBottom || !a_curBottom || !a_raster)
 			return;
-		const bool bottoms = a_prevBottom && a_curBottom;
-		if (!bottoms && !heightScrollTopCS)
-			return;
-		const bool fromRaster = bottoms && a_raster;
-		ID3D11ShaderResourceView* mergeSRVs[2] = { a_prevTop->srv.get(), bottoms ? a_prevBottom->srv.get() : nullptr };
-		ID3D11UnorderedAccessView* mergeUAVs[2] = { a_curTop->uav.get(), bottoms ? a_curBottom->uav.get() : nullptr };
-		ID3D11UnorderedAccessView* tileUAV = bottoms && a_tiles ? a_tiles->uav.get() : nullptr;
+		ID3D11ShaderResourceView* mergeSRVs[2] = { a_prevTop->srv.get(), a_prevBottom->srv.get() };
+		ID3D11UnorderedAccessView* mergeUAVs[2] = { a_curTop->uav.get(), a_curBottom->uav.get() };
+		ID3D11UnorderedAccessView* tileUAV = a_tiles ? a_tiles->uav.get() : nullptr;
 		context->CSSetConstantBuffers(0, 1, &processCB);
 		context->CSSetConstantBuffers(2, 1, &ghostCB);
 		context->CSSetShaderResources(0, 2, mergeSRVs);
-		if (fromRaster) {
-			ID3D11ShaderResourceView* rasterSRV = a_raster->srv.get();
-			context->CSSetShaderResources(6, 1, &rasterSRV);
-		}
+		ID3D11ShaderResourceView* rasterSRV = a_raster->srv.get();
+		context->CSSetShaderResources(6, 1, &rasterSRV);
 		context->CSSetUnorderedAccessViews(0, 2, mergeUAVs, nullptr);
 		context->CSSetUnorderedAccessViews(3, 1, &tileUAV, nullptr);
-		context->CSSetShader(fromRaster ? heightScrollRasterCS.get() : (bottoms ? heightScrollCS.get() : heightScrollTopCS.get()), nullptr, 0);
+		context->CSSetShader(heightScrollRasterCS.get(), nullptr, 0);
 		context->Dispatch((kHeightMapDim + 7) / 8, (kHeightMapDim + 7) / 8, 1);
-		if (fromRaster)
-			context->CSSetShaderResources(6, 1, nullCsSRVs);
+		context->CSSetShaderResources(6, 1, nullCsSRVs);
 		context->CSSetShaderResources(0, 2, nullCsSRVs);
 		context->CSSetUnorderedAccessViews(0, 2, nullCsUAVs, nullptr);
 		context->CSSetUnorderedAccessViews(3, 1, nullCsUAVs, nullptr);
@@ -1481,13 +1193,7 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->CSSetConstantBuffers(2, 1, &nullMergeCB);
 	};
 
-	const float topClear[4] = { kHeightMapEmptyTop, 0.0f, 0.0f, 0.0f };
 	const float rasterClear[4] = { kHeightMapEmptyTop, -kHeightMapEmptyBottom, 0.0f, 0.0f };
-	if (heightTop2Raw[heightCurrent] && !keepEmpty)
-		context->ClearRenderTargetView(heightTop2Raw[heightCurrent]->rtv.get(), topClear);
-
-	const float skinDepthClear[4] = { 0.0f, kNoRoadTop, 0.0f, 0.0f };
-	const bool roadRaster = capturedRoads > 0;
 	context->OMSetBlendState(heightRasterBlendState.get(), nullptr, 0xFFFFFFFF);
 
 	D3D11_VIEWPORT heightViewport{ 0.0f, 0.0f, float(kHeightMapDim), float(kHeightMapDim), 0.0f, 1.0f };
@@ -1504,41 +1210,14 @@ void SnowDeformation::RenderObjectHeightMap()
 	context->PSSetShaderResources(2, 1, &captureTerrainSRV);
 
 	const uint32_t captureCount = (uint32_t)capturedStatics.size();
-	const bool roadMaps = RoadMapsWanted();
-	const bool fineLevel = roadMaps && FineLevelOn() && heightTopRawFine;
-	const uint32_t recordBlocks = fineLevel ? 3u : 2u;
-	const bool farLevel = roadMaps && FarLevelActive();
-	farHalfExtentLive = 0.0f;
-	std::vector<uint32_t> farRecordIndex(captureCount, ~0u);
-	uint32_t farCount = 0;
-	if (farLevel) {
-		int sqMinX, sqMinY, sqMaxX, sqMaxY;
-		float halfCells = 2.0f;
-		if (LoadedCellSquare(sqMinX, sqMinY, sqMaxX, sqMaxY))
-			halfCells = float(sqMaxX - sqMinX) * 0.5f;
-		const float farHalf = std::min((halfCells + 1.0f) * 4096.0f, kFarPatchReach);
-		const float farTexel = farHalf * 2.0f / kHeightMapDim;
-		const auto farEye = globals::game::frameBufferCached.GetCameraPosAdjust();
-		farWindowCenter = { std::floor(farEye.x / farTexel) * farTexel, std::floor(farEye.y / farTexel) * farTexel };
-		farHalfExtentLive = farHalf;
-		for (uint32_t ci = 0; ci < captureCount; ci++)
-			if (capturedStatics[ci].road && !capturedStatics[ci].lodBatch)
-				farRecordIndex[ci] = farCount++;
-	}
-	const uint32_t farRecordBase = captureCount * recordBlocks;
 	static std::vector<StaticsCB> sCaptureRecords;
-	sCaptureRecords.assign(size_t(farRecordBase) + farCount, StaticsCB{});
+	sCaptureRecords.assign(captureCount, StaticsCB{});
 	auto& captureRecords = sCaptureRecords;
 	std::vector<uint8_t> recordNeeded(captureRecords.size(), 0);
-	std::fill(recordNeeded.begin() + farRecordBase, recordNeeded.end(), uint8_t(1));
-	float maxSeedDepth = 0.0f;
-	std::vector<ID3D11ShaderResourceView*> captureSmoothSRVs(captureCount, nullptr);
 	for (uint32_t ci = 0; ci < captureCount; ci++) {
 		auto& cap = capturedStatics[ci];
 		auto* geometry = cap.geometry.get();
 		if (!geometry)
-			continue;
-		if (cap.lodBatch)
 			continue;
 		RigidDraw draw;
 		if (!RigidDrawOf(geometry, draw))
@@ -1549,67 +1228,15 @@ void SnowDeformation::RenderObjectHeightMap()
 		if (uint32_t(draw.descKey & 0xF) == 0)
 			continue;
 
-		const bool inWindow = !outsideWindow(geometry, halfExtent);
-		recordNeeded[ci] |= uint8_t(inWindow);
-		recordNeeded[size_t(captureCount) + ci] = uint8_t(inWindow);
-		if (fineLevel)
-			recordNeeded[size_t(captureCount) * 2 + ci] = uint8_t(!outsideWindow(geometry, FineRasterHalfExtent()));
-
-		const float vertexCountF = float(draw.triShape->GetTrishapeRuntimeData().vertexCount);
-		const auto* smooth = SmoothedNormalsFor(cap);
-		ID3D11ShaderResourceView* smoothSRV = smooth && smooth->ready ? smooth->srv.get() : nullptr;
-		captureSmoothSRVs[ci] = smoothSRV;
+		recordNeeded[ci] = uint8_t(!outsideWindow(geometry, halfExtent));
 
 		StaticsCB& scb = captureRecords[ci];
 		SetWorldRows(cap.world, scb);
-		scb.ObjectsDepth = cap.road ? settings.RoadMeshesDepth : 0.0f;
-		scb.RoundedDepth = cap.road ? settings.RoadMeshesDepth : 0.0f;
-		maxSeedDepth = std::max(maxSeedDepth, std::max(scb.ObjectsDepth, scb.RoundedDepth));
-		scb.VertexCountF = vertexCountF;
 		scb.HeightWindowCenter = heightWindowCenter;
 		scb.HeightHalfExtent = halfExtent;
-		scb.LegacySkin = cap.road ? 1.0f : 0.0f;
-		scb.FadeExempt = cap.fadeExempt ? 1.0f : 0.0f;
-		scb.FullCoat = cap.fullCoat ? 1.0f : 0.0f;
-		scb.RoadField = cap.road ? 1.0f : 0.0f;
-		scb.ProjThreshold = cap.projThreshold;
-		{
-			const bool s4Shell = !cap.road && cap.projThreshold > -0.9f && SD_ProjNoiseMapSRV();
-			scb.ClassOverride = (s4Shell || cap.forceRounded) ? 1.0f : 0.0f;
-		}
-		scb.HasSmoothedNormals = smoothSRV ? 1.0f : 0.0f;
-
-		StaticsCB& peel = captureRecords[size_t(captureCount) + ci];
-		peel.WorldRow0 = scb.WorldRow0;
-		peel.WorldRow1 = scb.WorldRow1;
-		peel.WorldRow2 = scb.WorldRow2;
-		peel.HeightWindowCenter = heightWindowCenter;
-		peel.HeightHalfExtent = halfExtent;
-		peel.PeelTol = kPeelTol;
-		peel.VertexCountF = vertexCountF;
-		peel.HasSmoothedNormals = smoothSRV ? 1.0f : 0.0f;
-
-		if (fineLevel) {
-			StaticsCB& fine = captureRecords[size_t(captureCount) * 2 + ci];
-			fine = scb;
-			fine.HeightHalfExtent = FineRasterHalfExtent();
-		}
-		if (farRecordIndex[ci] != ~0u) {
-			StaticsCB& farBlock = captureRecords[size_t(farRecordBase) + farRecordIndex[ci]];
-			farBlock = scb;
-			farBlock.HeightWindowCenter = farWindowCenter;
-			farBlock.HeightHalfExtent = farHalfExtentLive;
-		}
 	}
 	const bool captureRecordsLive = captureCount > 0 && UploadStaticsRecords(captureRecords.data(), uint32_t(captureRecords.size()), recordNeeded.data());
 	uint32_t captureParity = 0;
-	uint32_t lastRasterRecord = ~0u;
-	uint32_t lastRasterParity = 0;
-	auto bindRasterRecord = [&](uint32_t a_index) {
-		lastRasterRecord = a_index;
-		lastRasterParity = captureParity;
-		BindStaticsRecord(a_index, false, false, captureParity);
-	};
 
 	struct HeightRasterDraw
 	{
@@ -1679,8 +1306,8 @@ void SnowDeformation::RenderObjectHeightMap()
 			put(&extra, sizeof(extra));
 		for (const auto& d : a_draws) {
 			const auto& cap = capturedStatics[d.capture];
-			const uint64_t drawBinds[6] = { reinterpret_cast<uint64_t>(d.layout), reinterpret_cast<uint64_t>(d.vb), reinterpret_cast<uint64_t>(d.ib),
-				reinterpret_cast<uint64_t>(captureSmoothSRVs[d.capture]), reinterpret_cast<uint64_t>(cap.geometry.get()), cap.road ? 1u : 0u };
+			const uint64_t drawBinds[4] = { reinterpret_cast<uint64_t>(d.layout), reinterpret_cast<uint64_t>(d.vb), reinterpret_cast<uint64_t>(d.ib),
+				reinterpret_cast<uint64_t>(cap.geometry.get()) };
 			const uint32_t counts[2] = { d.stride, d.indexCount };
 			put(drawBinds, sizeof(drawBinds));
 			put(counts, sizeof(counts));
@@ -1698,35 +1325,25 @@ void SnowDeformation::RenderObjectHeightMap()
 		}
 		return kept;
 	};
-	auto drawList = [&](const std::vector<HeightRasterDraw>& a_draws, bool a_roadsOnly) {
+	auto drawList = [&](const std::vector<HeightRasterDraw>& a_draws) {
 		SD_DrawBinds binds;
 		for (const auto& d : a_draws) {
-			if (a_roadsOnly && !capturedStatics[d.capture].road)
-				continue;
 			binds.Layout(context, d.layout);
 			binds.Vertex(context, d.vb, d.stride);
 			binds.Index(context, d.ib, DXGI_FORMAT_R16_UINT);
-			binds.Smooth(context, captureSmoothSRVs[d.capture]);
 			if (captureRecordsLive)
-				bindRasterRecord(d.record);
+				BindStaticsRecord(d.record, false, false, captureParity);
 			else
 				staticsCB->Update(captureRecords[d.record]);
 			context->DrawIndexed(d.indexCount, 0, 0);
 		}
 	};
-	auto noteLastRecord = [&](const std::vector<HeightRasterDraw>& a_draws) {
-		if (!a_draws.empty() && captureRecordsLive) {
-			lastRasterRecord = a_draws.back().record;
-			lastRasterParity = captureParity;
-		}
-	};
 	heightRasterKeptBits = 0;
 	heightRasterRuns++;
 	const bool verifyOn = heightRasterVerify && EnsureHeightRasterVerify();
-	const bool coneVerifyOn = coneVerify && EnsureHeightRasterVerify() && EnsureConeVerify();
 	const bool combineVerifyOn = combineVerify && EnsureHeightRasterVerify() && EnsureCombineVerify();
 	uint32_t verifiedLevels = 0;
-	if (verifyOn || coneVerifyOn || combineVerifyOn) {
+	if (verifyOn || combineVerifyOn) {
 		const UINT zero4[4] = {};
 		context->ClearUnorderedAccessViewUint(heightRasterVerifyAllUAV.get(), zero4);
 	}
@@ -1750,7 +1367,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	std::vector<HeightRasterDraw> layer1Draws;
 	for (uint32_t ci = 0; ci < captureCount; ci++) {
 		const auto& cap = capturedStatics[ci];
-		if (!cap.geometry || cap.lodBatch || outsideWindow(cap.geometry.get(), halfExtent))
+		if (!cap.geometry || outsideWindow(cap.geometry.get(), halfExtent))
 			continue;
 		const size_t drawsBefore = layer1Draws.size();
 		collectDraw(ci, ci, layer1Draws);
@@ -1764,31 +1381,23 @@ void SnowDeformation::RenderObjectHeightMap()
 			heightGhostsLive = true;
 		}
 	}
-	auto drawLayer1 = [&](ID3D11RenderTargetView* a_raster, ID3D11RenderTargetView* a_skin) {
+	auto drawLayer1 = [&](ID3D11RenderTargetView* a_raster) {
 		context->ClearRenderTargetView(a_raster, rasterClear);
-		context->ClearRenderTargetView(a_skin, skinDepthClear);
 		context->OMSetRenderTargets(1, &a_raster, nullptr);
 		context->PSSetShader(heightPS.get(), nullptr, 0);
-		drawList(layer1Draws, false);
-		if (roadRaster) {
-			context->OMSetRenderTargets(1, &a_skin, nullptr);
-			context->PSSetShader(heightPSSkinDepth.get(), nullptr, 0);
-			drawList(layer1Draws, true);
-		}
+		drawList(layer1Draws);
 	};
 	const bool layer1Kept = levelKept(0, rasterKey(layer1Draws, { reinterpret_cast<uint64_t>(heightVS.get()), reinterpret_cast<uint64_t>(heightPS.get()),
-															 reinterpret_cast<uint64_t>(heightPSSkinDepth.get()), reinterpret_cast<uint64_t>(captureTerrainSRV), shellTerrainVersion,
+															 reinterpret_cast<uint64_t>(captureTerrainSRV), shellTerrainVersion,
 															 std::bit_cast<uint32_t>(processData.TerrainWindowOrigin.x), std::bit_cast<uint32_t>(processData.TerrainWindowOrigin.y),
-															 std::bit_cast<uint32_t>(processData.TerrainTexelSize), processData.TerrainDim, roadRaster ? 1u : 0u }));
+															 std::bit_cast<uint32_t>(processData.TerrainTexelSize), processData.TerrainDim }));
 	ID3D11RenderTargetView* nullRTVs[3] = { nullptr, nullptr, nullptr };
 	globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Layer 1"));
 	if (!layer1Kept)
-		drawLayer1(heightRaster->rtv.get(), heightSkinDepth->rtv.get());
-	else
-		noteLastRecord(layer1Draws);
+		drawLayer1(heightRaster->rtv.get());
 	const bool verifyLayer1 = verifyOn && (layer1Kept || heightRasterVerifyMiss);
 	if (verifyLayer1)
-		drawLayer1(heightRasterVerifyTex[0]->rtv.get(), heightRasterVerifyTex[1]->rtv.get());
+		drawLayer1(heightRasterVerifyTex[0]->rtv.get());
 	globals::profiler->EndPass();
 
 	context->OMSetRenderTargets(3, nullRTVs, nullptr);
@@ -1796,7 +1405,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	context->PSSetShader(heightPS.get(), nullptr, 0);
 	if (verifyLayer1) {
 		compareKept(heightRaster, heightRasterVerifyTex[0], 0);
-		compareKept(heightSkinDepth, heightRasterVerifyTex[1], 1);
 		verifiedLevels |= 1u;
 	}
 
@@ -1804,124 +1412,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	if (!keepEmpty)
 		mergeGhost(heightTopRaw[previous], heightTopRaw[heightCurrent], heightBottomRaw[previous], heightBottomRaw[heightCurrent], heightTileEmpty, heightRaster);
 	globals::profiler->EndPass();
-
-	ID3D11PixelShader* topOnlyPS = heightPSTopOnly ? heightPSTopOnly.get() : heightPS.get();
-	auto drawTopOnly = [&](uint32_t a_level, Texture2D* a_target, const std::vector<HeightRasterDraw>& a_draws) {
-		const bool kept = levelKept(a_level, rasterKey(a_draws, { reinterpret_cast<uint64_t>(heightVS.get()), reinterpret_cast<uint64_t>(topOnlyPS) }));
-		const bool verify = verifyOn && (kept || heightRasterVerifyMiss);
-		context->PSSetShader(topOnlyPS, nullptr, 0);
-		globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow(a_level == 1 ? "SnowDeformation::Objects - Height Maps Fine" : "SnowDeformation::Objects - Height Maps Far"));
-		auto draw = [&](Texture2D* a_into) {
-			context->ClearRenderTargetView(a_into->rtv.get(), topClear);
-			ID3D11RenderTargetView* levelRTVs[1] = { a_into->rtv.get() };
-			context->OMSetRenderTargets(1, levelRTVs, nullptr);
-			drawList(a_draws, false);
-		};
-		if (!kept)
-			draw(a_target);
-		else
-			noteLastRecord(a_draws);
-		if (verify)
-			draw(heightRasterVerifyTex[a_level + 1]);
-		globals::profiler->EndPass();
-		context->OMSetRenderTargets(3, nullRTVs, nullptr);
-		if (verify) {
-			compareKept(a_target, heightRasterVerifyTex[a_level + 1], a_level + 1);
-			verifiedLevels |= 1u << a_level;
-		}
-	};
-	if (fineLevel) {
-		std::vector<HeightRasterDraw> fineDraws;
-		for (uint32_t ci = 0; ci < captureCount; ci++) {
-			const auto& cap = capturedStatics[ci];
-			if (!cap.geometry || cap.lodBatch || outsideWindow(cap.geometry.get(), FineRasterHalfExtent()))
-				continue;
-			collectDraw(ci, captureCount * 2 + ci, fineDraws);
-		}
-		drawTopOnly(1, heightTopRawFine, fineDraws);
-	} else {
-		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Height Maps");
-	}
-
-	if (farLevel) {
-		std::vector<HeightRasterDraw> farDraws;
-		for (uint32_t ci = 0; ci < captureCount; ci++)
-			if (farRecordIndex[ci] != ~0u && capturedStatics[ci].geometry)
-				collectDraw(ci, farRecordBase + farRecordIndex[ci], farDraws);
-		drawTopOnly(2, heightTopRawFar, farDraws);
-	} else {
-		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Height Maps");
-	}
-	if (lastRasterRecord != ~0u) {
-		ID3D11Buffer* none = nullptr;
-		context->PSSetConstantBuffers(1, 1, &none);
-		ID3D11Buffer* buffer = staticsRecordCB[lastRasterParity & 1].get();
-		const UINT first = lastRasterRecord * (kStaticsRecordStride / 16);
-		const UINT count = kStaticsRecordStride / 16;
-		staticsContext1->PSSetConstantBuffers1(1, 1, &buffer, &first, &count);
-	}
-
-	Texture2D* peelTarget = heightTop2Raw[heightCurrent];
-	if (heightPeelPS && peelTarget && !keepEmpty) {
-		ID3D11RenderTargetView* peelRTVs[1] = { peelTarget->rtv.get() };
-		context->OMSetRenderTargets(1, peelRTVs, nullptr);
-		context->PSSetShader(heightPeelPS.get(), nullptr, 0);
-		ID3D11ShaderResourceView* peelSRVs[1] = { heightTopRaw[heightCurrent]->srv.get() };
-		context->PSSetShaderResources(3, 1, peelSRVs);
-		context->PSSetConstantBuffers(1, 1, &cb1);
-
-		globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Peel"));
-		SD_DrawBinds peelBinds;
-		for (uint32_t ci = 0; ci < captureCount; ci++) {
-			const auto& cap = capturedStatics[ci];
-			auto* geometry = cap.geometry.get();
-			if (!geometry)
-				continue;
-			if (cap.lodBatch)
-				continue;
-			if (outsideWindow(geometry, halfExtent))
-				continue;
-			RigidDraw draw;
-			if (!RigidDrawOf(geometry, draw))
-				continue;
-			auto layoutIt = staticsILCache.find(draw.descKey);
-			if (layoutIt == staticsILCache.end() || !layoutIt->second)
-				continue;
-			peelBinds.Layout(context, layoutIt->second.get());
-			UINT stride = uint32_t(draw.descKey & 0xF) * 4;
-			if (stride == 0)
-				continue;
-			peelBinds.Vertex(context, draw.vb, stride);
-			peelBinds.Index(context, draw.ib, DXGI_FORMAT_R16_UINT);
-
-			peelBinds.Smooth(context, captureSmoothSRVs[ci]);
-			if (captureRecordsLive)
-				BindStaticsRecord(captureCount + ci, true, false, captureParity);
-			else
-				staticsCB->Update(captureRecords[size_t(captureCount) + ci]);
-			context->DrawIndexed(draw.indexCount, 0, 0);
-		}
-		globals::profiler->EndPass();
-
-		context->OMSetRenderTargets(3, nullRTVs, nullptr);
-		ID3D11ShaderResourceView* nullPeelSRVs[2] = { nullptr, nullptr };
-		context->PSSetShaderResources(3, 2, nullPeelSRVs);
-
-		globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Peel Merge"));
-		if (heightScrollTopCS) {
-			mergeGhost(heightTop2Raw[previous], peelTarget, nullptr, nullptr, nullptr);
-		} else {
-			if (!heightScratch) {
-				const DXGI_FORMAT format = heightBottomRaw[0]->desc.Format;
-				heightScratch = new Texture2D(heightBottomRaw[0]->desc, "SnowDeformation::HeightPeelScratch");
-				heightScratch->CreateSRV({ .Format = format, .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D, .Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 } });
-				heightScratch->CreateRTV({ .Format = format, .ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D, .Texture2D = { .MipSlice = 0 } });
-				heightScratch->CreateUAV({ .Format = format, .ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D, .Texture2D = { .MipSlice = 0 } });
-			}
-			mergeGhost(heightTop2Raw[previous], peelTarget, heightBottomRaw[previous], heightScratch, nullptr);
-		}
-		globals::profiler->EndPass();
-	}
 
 	ID3D11Buffer* nullVB = nullptr;
 	UINT zero = 0;
@@ -1933,9 +1423,8 @@ void SnowDeformation::RenderObjectHeightMap()
 	ID3D11Buffer* nullCB1 = nullptr;
 	context->VSSetConstantBuffers(1, 1, &nullCB1);
 	context->PSSetConstantBuffers(0, 1, &nullCB1);
-	ID3D11ShaderResourceView* nullSmoothSRV = nullptr;
-	context->VSSetShaderResources(10, 1, &nullSmoothSRV);
-	context->PSSetShaderResources(2, 1, &nullSmoothSRV);
+	ID3D11ShaderResourceView* nullTerrainSRV = nullptr;
+	context->PSSetShaderResources(2, 1, &nullTerrainSRV);
 
 	const UINT dispatchDim = (kHeightMapDim + 7) / 8;
 	globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Combine"));
@@ -1974,117 +1463,9 @@ void SnowDeformation::RenderObjectHeightMap()
 		verifiedLevels |= 1u << 5;
 	}
 
-	static constexpr uint kConeSteps[] = { 64, 32, 16, 8, 4, 2, 1, 1 };
-	static constexpr uint kConeFusedTile = 16;
-	auto activeConeSteps = [&](const HeightProcessCB& a_data, float a_maxSeed) {
-		std::vector<uint> steps;
-		const float texel = a_data.HeightHalfExtent * 2.0f / float(kHeightMapDim);
-		for (uint step : kConeSteps)
-			if (float(step) * texel * a_data.SlopePerUnit <= a_maxSeed * 1.001f)
-				steps.push_back(step);
-		return steps;
-	};
+	heightMapsEmpty = emptyWindow && keepEmpty;
 
-	processData.ObjectSnowDepth = 0.1f;
-	heightProcessCB->Update(processData);
-	conePassesCoarse = 0;
-	bool coneBuilt = false;
-	if (!roadMaps || keepEmpty) {
-		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Height Maps");
-	} else if (objectConeSeedCS && objectConeCS && objectSnowCone && heightTopRaw[heightCurrent]) {
-		coneBuilt = true;
-		globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Object Cone"));
-		const auto coarseSteps = activeConeSteps(processData, std::max(maxSeedDepth, processData.ObjectSnowDepth));
-		conePassesCoarse = uint32_t(coarseSteps.size());
-		coneRuns++;
-
-		auto settleCone = [&](Texture2D*& a_in, Texture2D*& a_out) {
-			if (!objectConeDiffuseCS)
-				return;
-			context->CSSetShader(objectConeDiffuseCS.get(), nullptr, 0);
-			for (int settleI = 0; settleI < 2; settleI++) {
-				ID3D11ShaderResourceView* settleSRV = a_in->srv.get();
-				ID3D11UnorderedAccessView* settleUAV = a_out->uav.get();
-				context->CSSetShaderResources(0, 1, &settleSRV);
-				context->CSSetUnorderedAccessViews(0, 1, &settleUAV, nullptr);
-				context->Dispatch(dispatchDim, dispatchDim, 1);
-				context->CSSetShaderResources(0, 1, nullCsSRVs);
-				context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
-				std::swap(a_in, a_out);
-			}
-		};
-
-		auto repose = [&](Texture2D* a_cone, Texture2D* a_seeded, HeightProcessCB& a_data, const std::vector<uint>& a_steps) {
-			Texture2D* in = a_seeded;
-			Texture2D* out = a_seeded == a_cone ? heightBottomRaw[previous] : a_cone;
-			context->CSSetShader(objectConeCS, nullptr, 0);
-			for (uint step : a_steps) {
-				a_data.ConeStep = step;
-				heightProcessCB->Update(a_data);
-				ID3D11ShaderResourceView* passSRV = in->srv.get();
-				ID3D11UnorderedAccessView* passUAV = out->uav.get();
-				context->CSSetShaderResources(0, 1, &passSRV);
-				context->CSSetUnorderedAccessViews(0, 1, &passUAV, nullptr);
-				context->Dispatch(dispatchDim, dispatchDim, 1);
-				context->CSSetShaderResources(0, 1, nullCsSRVs);
-				context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
-				std::swap(in, out);
-			}
-			settleCone(in, out);
-		};
-
-		auto chainCone = [&](Texture2D* a_cone, ID3D11ComputeShader* a_seedCS, const auto& a_bindSeed) {
-			Texture2D* seeded = (coarseSteps.size() % 2) ? heightBottomRaw[previous] : a_cone;
-			heightProcessCB->Update(processData);
-			context->CSSetConstantBuffers(0, 1, &processCB);
-			context->CSSetShader(a_seedCS, nullptr, 0);
-			a_bindSeed(true);
-			ID3D11UnorderedAccessView* seedUAV = seeded->uav.get();
-			context->CSSetUnorderedAccessViews(0, 1, &seedUAV, nullptr);
-			context->Dispatch(dispatchDim, dispatchDim, 1);
-			a_bindSeed(false);
-			context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
-			repose(a_cone, seeded, processData, coarseSteps);
-		};
-		const bool fuse = coarseSteps.empty() && objectConeDiffuseCS && !coneFusedOff;
-		auto fusedCone = [&](Texture2D* a_cone, ID3D11ComputeShader* a_fusedCS, const auto& a_bindSeed) {
-			heightProcessCB->Update(processData);
-			context->CSSetConstantBuffers(0, 1, &processCB);
-			context->CSSetShader(a_fusedCS, nullptr, 0);
-			a_bindSeed(true);
-			ID3D11UnorderedAccessView* coneUAV = a_cone->uav.get();
-			context->CSSetUnorderedAccessViews(0, 1, &coneUAV, nullptr);
-			context->Dispatch(kHeightMapDim / kConeFusedTile, kHeightMapDim / kConeFusedTile, 1);
-			a_bindSeed(false);
-			context->CSSetUnorderedAccessViews(0, 1, nullCsUAVs, nullptr);
-		};
-
-		ID3D11ShaderResourceView* objectSeedSRVs[2] = { heightTopRaw[heightCurrent]->srv.get(),
-			heightSkinDepth ? heightSkinDepth->srv.get() : nullptr };
-		ID3D11ShaderResourceView* objectSeedNextSRV = heightTop2Raw[heightCurrent] ? heightTop2Raw[heightCurrent]->srv.get() : nullptr;
-		auto bindObjectSeed = [&](bool a_bind) {
-			ID3D11ShaderResourceView* nullSeedSRVs[2] = { nullptr, nullptr };
-			context->CSSetShaderResources(0, 2, a_bind ? objectSeedSRVs : nullSeedSRVs);
-			context->CSSetShaderResources(3, 1, a_bind ? &objectSeedNextSRV : nullCsSRVs);
-		};
-		const bool objectFused = fuse && objectConeFusedCS;
-		if (objectFused) {
-			fusedCone(objectSnowCone, objectConeFusedCS, bindObjectSeed);
-			coneFusedRuns++;
-		} else {
-			chainCone(objectSnowCone, objectConeSeedCS, bindObjectSeed);
-		}
-		if (coneVerifyOn && objectFused) {
-			chainCone(coneVerifyTex, objectConeSeedCS, bindObjectSeed);
-			compareKept(objectSnowCone, coneVerifyTex, 4);
-			verifiedLevels |= 1u << 3;
-		}
-		globals::profiler->EndPass();
-
-	}
-	heightMapsEmpty = emptyWindow && (keepEmpty || coneBuilt);
-
-	if ((verifyOn || coneVerifyOn || combineVerifyOn) && verifiedLevels) {
+	if ((verifyOn || combineVerifyOn) && verifiedLevels) {
 		auto& ring = heightRasterVerifyRing;
 		if (!heightRasterVerifyStagingLevels[ring % 3]) {
 			context->CopyResource(heightRasterVerifyStaging[ring % 3].get(), heightRasterVerifyCount.get());
@@ -2134,1104 +1515,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	ID3D11Buffer* nullProcessCB = nullptr;
 	context->CSSetConstantBuffers(0, 1, &nullProcessCB);
 	context->CSSetShader(nullptr, nullptr, 0);
-}
-
-void SnowDeformation::FillSkinDrawCB(const CapturedSnowStatic& a_cap, bool a_s4Shell, float a_vertexCount, bool a_hasSmoothedNormals, bool a_hasObjectTop, StaticsCB& a_scb) const
-{
-	SetWorldRows(a_cap.world, a_scb);
-	a_scb.ObjectsDepth = a_cap.road ? settings.RoadMeshesDepth : 0.0f;
-	a_scb.RoundedDepth = a_cap.road ? settings.RoadMeshesDepth : 0.0f;
-	a_scb.VertexCountF = a_vertexCount;
-	a_scb.HeightWindowCenter = heightWindowCenter;
-	a_scb.HeightHalfExtent = ObjectRasterHalfExtent();
-	a_scb.HasSmoothedNormals = a_hasSmoothedNormals ? 1.0f : 0.0f;
-	a_scb.HasObjectTop = a_hasObjectTop ? 1.0f : 0.0f;
-	a_scb.LegacySkin = a_cap.road ? 1.0f : 0.0f;
-	a_scb.FadeExempt = a_cap.fadeExempt ? 1.0f : 0.0f;
-	a_scb.FullCoat = a_cap.fullCoat ? 1.0f : 0.0f;
-	a_scb.RoadField = a_cap.road ? 1.0f : 0.0f;
-	a_scb.ProjThreshold = a_cap.projThreshold;
-	a_scb.ClassOverride = (a_s4Shell || a_cap.forceRounded) ? 1.0f : 0.0f;
-	a_scb.ProjNoiseScale = a_cap.projNoiseScale;
-	a_scb.ProjNoiseTiling = a_cap.projNoiseTiling;
-	a_scb.ProjNoiseWeight = a_cap.projNoiseWeight;
-	a_scb.ParallaxFollow = (settings.SnowFollowsParallax && a_cap.mayParallax) ? 1.0f : 0.0f;
-	a_scb.ProjPixelEnable = a_s4Shell ? 2.0f : 0.0f;
-	a_scb.PeelTol = kPeelTol;
-	a_scb.HasSkinMasksCopy = landMasksCopySRV ? 1.0f : 0.0f;
-	a_scb.HasPreDecalMasks = (preDecalMasksSRV && preDecalMasksFrame == globals::state->frameCount) ? 1.0f : 0.0f;
-	a_scb.EdgeFlankWidth = (settings.EnableSnowAccumulation && settings.RecoloredSnowAccumulates) ?
-	                           snowAccumulation.load(std::memory_order_relaxed) :
-	                           std::clamp(settings.SkinEdgeFlankWidth, 0.0f, 1.0f);
-	a_scb.SteepThin = std::clamp(settings.SteepFaceThinning, 0.0f, 1.0f);
-	a_scb.EdgeCoat = (settings.ProjSnowMatch && (a_cap.projReal || a_cap.lodBatch || a_cap.snowTex) && a_cap.geometry && a_cap.matoSnow) ? 1.0f : 0.0f;
-	a_scb.FineHalfExtent = (FineLevelOn() && heightTopRawFine) ? FineRasterHalfExtent() : 0.0f;
-	a_scb.FarWindowCenterX = farWindowCenter.x;
-	a_scb.FarWindowCenterY = farWindowCenter.y;
-	a_scb.FarHalfExtent = farHalfExtentLive;
-	a_scb.FarRoadDepth = settings.RoadMeshesDepth;
-	a_scb.LODBatch = a_cap.lodBatch ? 1.0f : 0.0f;
-	a_scb.TexturedSnow = a_cap.snowTex ? 1.0f : 0.0f;
-	a_scb.AlphaTested = a_cap.alphaTested ? 1.0f : 0.0f;
-	a_scb.DecalMode = a_cap.decalDepth ? 1.0f : 0.0f;
-}
-
-bool SnowDeformation::EnsureSmoothNormalsCS()
-{
-	if (!smoothAccumulateCS)
-		smoothAccumulateCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "ACCUMULATE", "" } }, "cs_5_0")));
-	if (!smoothResolveCS)
-		smoothResolveCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "RESOLVE", "" } }, "cs_5_0")));
-	if (!smoothFlatStatsCS)
-		smoothFlatStatsCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "FLATSTATS", "" } }, "cs_5_0")));
-	if (!smoothBoundsCS)
-		smoothBoundsCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "MESHBOUNDS", "" } }, "cs_5_0")));
-	if (!smoothClusterCS)
-		smoothClusterCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SmoothNormalsCS.hlsl", { { "CLUSTERBOUNDS", "" } }, "cs_5_0")));
-	if (!meshBounds && smoothBoundsCS) {
-		D3D11_BUFFER_DESC desc = StructuredBufferDesc<float4>(uint64_t(kMeshBoundsSlots * 2));
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-		srvDesc.Buffer.NumElements = kMeshBoundsSlots * 2;
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-		uavDesc.Format = DXGI_FORMAT_UNKNOWN;
-		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-		uavDesc.Buffer.NumElements = kMeshBoundsSlots * 2;
-		meshBounds = new Buffer(desc, nullptr, "SnowDeformation::MeshBounds");
-		meshBounds->CreateSRV(srvDesc);
-		meshBounds->CreateUAV(uavDesc);
-	}
-	return smoothAccumulateCS && smoothResolveCS && smoothFlatStatsCS;
-}
-
-bool SnowDeformation::EnsureClusterResources(uint32_t a_scratchIndices)
-{
-	if (!clusterBounds) {
-		D3D11_BUFFER_DESC desc = StructuredBufferDesc<float4>(uint64_t(kClusterSlots * 2));
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-		srvDesc.Format = DXGI_FORMAT_UNKNOWN;
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-		srvDesc.Buffer.NumElements = kClusterSlots * 2;
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-		uavDesc.Format = DXGI_FORMAT_UNKNOWN;
-		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-		uavDesc.Buffer.NumElements = kClusterSlots * 2;
-		clusterBounds = new Buffer(desc, nullptr, "SnowDeformation::ClusterBounds");
-		clusterBounds->CreateSRV(srvDesc);
-		clusterBounds->CreateUAV(uavDesc);
-	}
-	if (!clusterIndexPool) {
-		D3D11_BUFFER_DESC desc{};
-		desc.ByteWidth = kClusterIndexPoolIndices * 2;
-		desc.Usage = D3D11_USAGE_DEFAULT;
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-		srvDesc.Format = DXGI_FORMAT_R32_TYPELESS;
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
-		srvDesc.BufferEx.NumElements = kClusterIndexPoolIndices / 2;
-		srvDesc.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
-		clusterIndexPool = new Buffer(desc, nullptr, "SnowDeformation::ClusterIndexPool");
-		clusterIndexPool->CreateSRV(srvDesc);
-	}
-	const uint32_t wantScratch = std::min(std::max(a_scratchIndices, 1u << 20), kClusterScratchMaxIndices);
-	if (clusterScratchIB && clusterScratchCapacity < wantScratch) {
-		delete clusterScratchIB;
-		clusterScratchIB = nullptr;
-	}
-	if (!clusterScratchIB) {
-		clusterScratchCapacity = wantScratch;
-		D3D11_BUFFER_DESC desc{};
-		desc.ByteWidth = clusterScratchCapacity * 4;
-		desc.Usage = D3D11_USAGE_DEFAULT;
-		desc.BindFlags = D3D11_BIND_INDEX_BUFFER | D3D11_BIND_UNORDERED_ACCESS;
-		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-		uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
-		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-		uavDesc.Buffer.NumElements = clusterScratchCapacity;
-		uavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
-		clusterScratchIB = new Buffer(desc, nullptr, "SnowDeformation::ClusterScratchIB");
-		clusterScratchIB->CreateUAV(uavDesc);
-	}
-	return clusterBounds->srv && clusterBounds->uav && clusterIndexPool->srv && clusterScratchIB->uav;
-}
-
-void SnowDeformation::RangeAllocator::Reset(uint32_t a_capacity)
-{
-	free.clear();
-	if (a_capacity)
-		free.emplace(0u, a_capacity);
-}
-
-uint32_t SnowDeformation::RangeAllocator::Allocate(uint32_t a_count, uint32_t a_align)
-{
-	if (a_count == 0 || a_align == 0)
-		return UINT32_MAX;
-	for (auto it = free.begin(); it != free.end(); ++it) {
-		const uint64_t rangeStart = it->first;
-		const uint64_t rangeEnd = rangeStart + it->second;
-		const uint64_t start = (rangeStart + a_align - 1) / a_align * a_align;
-		if (start + a_count > rangeEnd)
-			continue;
-		free.erase(it);
-		if (start > rangeStart)
-			free.emplace(uint32_t(rangeStart), uint32_t(start - rangeStart));
-		if (rangeEnd > start + a_count)
-			free.emplace(uint32_t(start + a_count), uint32_t(rangeEnd - start - a_count));
-		return uint32_t(start);
-	}
-	return UINT32_MAX;
-}
-
-void SnowDeformation::RangeAllocator::Release(uint32_t a_offset, uint32_t a_count)
-{
-	if (a_count == 0)
-		return;
-	uint32_t start = a_offset;
-	uint32_t end = a_offset + a_count;
-	auto next = free.lower_bound(start);
-	if (next != free.begin()) {
-		auto prev = std::prev(next);
-		if (prev->first + prev->second == start) {
-			start = prev->first;
-			free.erase(prev);
-		}
-	}
-	if (next != free.end() && next->first == end) {
-		end += next->second;
-		free.erase(next);
-	}
-	free.emplace(start, end - start);
-}
-
-void SnowDeformation::ResetSmoothedNormals(bool a_release)
-{
-	smoothedNormalsCache.clear();
-	smoothedNormalsLru.clear();
-	smoothedNormalsResets++;
-	meshBoundsFree.Reset(kMeshBoundsSlots);
-	clusterFree.Reset(kClusterSlots);
-	clusterIndexPoolFree.Reset(kClusterIndexPoolIndices);
-	if (a_release) {
-		smoothedNormalsChunks.clear();
-		smoothSource = nullptr;
-		smoothSourceSRV = nullptr;
-		smoothSourceBytes = 0;
-		smoothTable = nullptr;
-		smoothTableUAVs.clear();
-		smoothTableSlots = 0;
-	} else {
-		for (auto& chunk : smoothedNormalsChunks)
-			chunk.ranges.Reset(chunk.capacity);
-	}
-	smoothAllocatorsLive = true;
-}
-
-void SnowDeformation::EvictSmoothedNormals(std::unordered_map<void*, SmoothedNormalsEntry>::iterator a_it)
-{
-	auto& e = a_it->second;
-	if (e.chunk < smoothedNormalsChunks.size())
-		smoothedNormalsChunks[e.chunk].ranges.Release(e.chunkOffset, e.chunkCount);
-	if (e.boundsSlot != UINT32_MAX)
-		meshBoundsFree.Release(e.boundsSlot, 1);
-	if (e.clusterCount != 0) {
-		clusterFree.Release(e.clusterOffset, e.clusterCount);
-		clusterIndexPoolFree.Release(e.indexPoolOffset, e.indexCount);
-	}
-	smoothedNormalsLru.erase(e.lru);
-	smoothedNormalsCache.erase(a_it);
-}
-
-bool SnowDeformation::EnsureSmoothBuildScratch(uint32_t a_sourceBytes, uint32_t a_tableSlots)
-{
-	auto device = globals::d3d::device;
-	if (a_sourceBytes > smoothSourceBytes) {
-		if (a_sourceBytes > (1u << 30))
-			return false;
-		uint32_t bytes = std::max(smoothSourceBytes, 1u << 20);
-		while (bytes < a_sourceBytes)
-			bytes <<= 1;
-		D3D11_BUFFER_DESC desc{};
-		desc.ByteWidth = bytes;
-		desc.Usage = D3D11_USAGE_DEFAULT;
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-		winrt::com_ptr<ID3D11Buffer> buffer;
-		if (FAILED(device->CreateBuffer(&desc, nullptr, buffer.put())))
-			return false;
-		Util::SetResourceName(buffer.get(), "SnowDeformation::SmoothSource");
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
-		srvDesc.Format = DXGI_FORMAT_R32_TYPELESS;
-		srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
-		srvDesc.BufferEx.NumElements = bytes / 4;
-		srvDesc.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
-		winrt::com_ptr<ID3D11ShaderResourceView> srv;
-		if (FAILED(device->CreateShaderResourceView(buffer.get(), &srvDesc, srv.put())))
-			return false;
-		Util::SetResourceName(srv.get(), "SnowDeformation::SmoothSource SRV");
-		smoothSource = buffer;
-		smoothSourceSRV = srv;
-		smoothSourceBytes = bytes;
-	}
-	if (a_tableSlots > smoothTableSlots) {
-		if (a_tableSlots > (1u << 24))
-			return false;
-		uint32_t slots = std::max(smoothTableSlots, 1u << 15);
-		while (slots < a_tableSlots)
-			slots <<= 1;
-		D3D11_BUFFER_DESC desc{};
-		desc.ByteWidth = slots * 16;
-		desc.Usage = D3D11_USAGE_DEFAULT;
-		desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
-		desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-		winrt::com_ptr<ID3D11Buffer> buffer;
-		if (FAILED(device->CreateBuffer(&desc, nullptr, buffer.put())))
-			return false;
-		Util::SetResourceName(buffer.get(), "SnowDeformation::SmoothTable");
-		smoothTable = buffer;
-		smoothTableUAVs.clear();
-		smoothTableSlots = slots;
-	}
-	const uint32_t level = uint32_t(std::countr_zero(a_tableSlots));
-	if (smoothTableUAVs.size() <= level)
-		smoothTableUAVs.resize(level + 1);
-	if (!smoothTableUAVs[level]) {
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-		uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
-		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-		uavDesc.Buffer.NumElements = a_tableSlots * 4;
-		uavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
-		if (FAILED(device->CreateUnorderedAccessView(smoothTable.get(), &uavDesc, smoothTableUAVs[level].put())))
-			return false;
-		Util::SetResourceName(smoothTableUAVs[level].get(), "SnowDeformation::SmoothTable UAV");
-	}
-	return true;
-}
-
-bool SnowDeformation::AllocateSmoothedNormals(uint32_t a_count, uint32_t& a_chunk, uint32_t& a_offset)
-{
-	for (uint32_t i = 0; i < smoothedNormalsChunks.size(); i++) {
-		const uint32_t offset = smoothedNormalsChunks[i].ranges.Allocate(a_count);
-		if (offset != UINT32_MAX) {
-			a_chunk = i;
-			a_offset = offset;
-			return true;
-		}
-	}
-	const uint32_t capacity = std::max(kSmoothedNormalsChunkElements, a_count);
-	D3D11_BUFFER_DESC desc = StructuredBufferDesc<float4>(uint64_t(capacity));
-	SmoothedNormalsChunk chunk;
-	auto device = globals::d3d::device;
-	if (FAILED(device->CreateBuffer(&desc, nullptr, chunk.buffer.put())))
-		return false;
-	Util::SetResourceName(chunk.buffer.get(), "SnowDeformation::SmoothedNormals");
-	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-	uavDesc.Format = DXGI_FORMAT_UNKNOWN;
-	uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-	uavDesc.Buffer.NumElements = capacity;
-	if (FAILED(device->CreateUnorderedAccessView(chunk.buffer.get(), &uavDesc, chunk.uav.put())))
-		return false;
-	Util::SetResourceName(chunk.uav.get(), "SnowDeformation::SmoothedNormals UAV");
-	chunk.capacity = capacity;
-	chunk.ranges.Reset(capacity);
-	a_offset = chunk.ranges.Allocate(a_count);
-	a_chunk = uint32_t(smoothedNormalsChunks.size());
-	smoothedNormalsChunks.push_back(std::move(chunk));
-	logger::info("[SNOW DEFORMATION] Smoothed-normal pool: buffer {} created ({} elements) at {} entries", a_chunk, capacity, smoothedNormalsCache.size());
-	return a_offset != UINT32_MAX;
-}
-
-SnowDeformation::SmoothedNormalsEntry* SnowDeformation::SmoothedNormalsFor(CapturedSnowStatic& a_cap)
-{
-	const uint32_t frame = globals::state->frameCount;
-	if (a_cap.smoothFrame != frame || a_cap.smoothResets != smoothedNormalsResets) {
-		a_cap.smoothEntry = a_cap.geometry ? EnsureSmoothedNormals(a_cap.geometry.get()) : nullptr;
-		a_cap.smoothFrame = frame;
-		a_cap.smoothResets = smoothedNormalsResets;
-	}
-	return a_cap.smoothEntry;
-}
-
-SnowDeformation::SmoothedNormalsEntry* SnowDeformation::EnsureSmoothedNormals(RE::BSGeometry* a_geometry)
-{
-	auto triShape = a_geometry->AsTriShape();
-	if (!triShape)
-		return nullptr;
-	auto rendererData = a_geometry->GetGeometryRuntimeData().rendererData;
-	if (!rendererData || !rendererData->vertexBuffer)
-		return nullptr;
-	if (!smoothAllocatorsLive)
-		ResetSmoothedNormals(false);
-
-	auto desc = rendererData->vertexDesc;
-	uint64_t descKey;
-	memcpy(&descKey, &desc, sizeof(descKey));
-	const uint32_t vertexCount = triShape->GetTrishapeRuntimeData().vertexCount;
-	const uint32_t triangleCount = triShape->GetTrishapeRuntimeData().triangleCount;
-	const uint32_t frame = globals::state->frameCount;
-
-	if (auto found = smoothedNormalsCache.find(rendererData->vertexBuffer); found != smoothedNormalsCache.end()) {
-		auto& hit = found->second;
-		if (hit.lastUsedFrame == frame ||
-			(hit.descKey == descKey && hit.gameIB == rendererData->indexBuffer && hit.vertexCount == vertexCount && hit.triangleCount == triangleCount)) {
-			if (hit.lastUsedFrame != frame) {
-				hit.lastUsedFrame = frame;
-				smoothedNormalsLru.splice(smoothedNormalsLru.end(), smoothedNormalsLru, hit.lru);
-			}
-			return &hit;
-		}
-		EvictSmoothedNormals(found);
-	}
-	while (smoothedNormalsCache.size() >= kSmoothedNormalsCap && !smoothedNormalsLru.empty()) {
-		auto oldest = smoothedNormalsCache.find(smoothedNormalsLru.front());
-		if (oldest == smoothedNormalsCache.end()) {
-			smoothedNormalsLru.pop_front();
-			continue;
-		}
-		if (oldest->second.lastUsedFrame == frame)
-			break;
-		EvictSmoothedNormals(oldest);
-	}
-	auto& entry = smoothedNormalsCache[rendererData->vertexBuffer];
-	entry.descKey = descKey;
-	entry.gameIB = rendererData->indexBuffer;
-	entry.vertexCount = vertexCount;
-	entry.triangleCount = triangleCount;
-	entry.lastUsedFrame = frame;
-	entry.lru = smoothedNormalsLru.insert(smoothedNormalsLru.end(), rendererData->vertexBuffer);
-
-	if (!EnsureSmoothNormalsCS() || !smoothCB)
-		return nullptr;
-
-	if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL))
-		return nullptr;
-	const uint32_t stride = uint32_t(descKey & 0xF) * 4;
-	if (stride == 0 || vertexCount == 0)
-		return nullptr;
-
-	const uint32_t positionBytes = SD_PositionBytes(descKey, desc);
-	const uint32_t normalOffset = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_NORMAL);
-	uint32_t colorOffset = 0;
-	bool hasColor = false;
-	if (desc.HasFlag(RE::BSGraphics::Vertex::VF_COLORS)) {
-		colorOffset = desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_COLOR);
-		hasColor = colorOffset > 0 && colorOffset + 4 <= stride;
-	}
-
-	auto device = globals::d3d::device;
-	auto context = globals::d3d::context;
-	auto* gameVB = reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer);
-	auto* gameIB = reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer);
-
-	D3D11_BUFFER_DESC srcDesc{};
-	gameVB->GetDesc(&srcDesc);
-	if (uint64_t(vertexCount) * stride > srcDesc.ByteWidth)
-		return nullptr;
-	uint32_t tableSlots = 64;
-	while (tableSlots < vertexCount * 2)
-		tableSlots <<= 1;
-	if (!EnsureSmoothBuildScratch(srcDesc.ByteWidth, tableSlots))
-		return nullptr;
-	uint32_t chunk = UINT32_MAX;
-	uint32_t chunkOffset = 0;
-	if (!AllocateSmoothedNormals(vertexCount + 1, chunk, chunkOffset))
-		return nullptr;
-	entry.chunk = chunk;
-	entry.chunkOffset = chunkOffset;
-	entry.chunkCount = vertexCount + 1;
-	D3D11_SHADER_RESOURCE_VIEW_DESC outSrvDesc{};
-	outSrvDesc.Format = DXGI_FORMAT_UNKNOWN;
-	outSrvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-	outSrvDesc.Buffer.FirstElement = chunkOffset;
-	outSrvDesc.Buffer.NumElements = vertexCount + 1;
-	winrt::com_ptr<ID3D11ShaderResourceView> outSRV;
-	if (FAILED(device->CreateShaderResourceView(smoothedNormalsChunks[chunk].buffer.get(), &outSrvDesc, outSRV.put())))
-		return nullptr;
-
-	const D3D11_BOX sourceBox{ 0, 0, 0, srcDesc.ByteWidth, 1, 1 };
-	context->CopySubresourceRegion(smoothSource.get(), 0, 0, 0, 0, gameVB, 0, &sourceBox);
-	ID3D11UnorderedAccessView* tableUAV = smoothTableUAVs[std::countr_zero(tableSlots)].get();
-	const UINT clearZero[4] = { 0, 0, 0, 0 };
-	context->ClearUnorderedAccessViewUint(tableUAV, clearZero);
-
-	SmoothCB cb{};
-	cb.VertexCount = vertexCount;
-	cb.StrideBytes = stride;
-	cb.NormalOffsetBytes = normalOffset;
-	cb.PosIsFloat32 = positionBytes >= 16 ? 1u : 0u;
-	cb.TableMask = tableSlots - 1;
-	cb.ColorOffsetBytes = colorOffset;
-	cb.HasColor = hasColor ? 1u : 0u;
-	cb.OutBase = chunkOffset;
-	const uint32_t boundsSlot = (smoothBoundsCS && meshBounds && meshBounds->uav) ? meshBoundsFree.Allocate(1) : UINT32_MAX;
-	const bool wantBounds = boundsSlot != UINT32_MAX;
-	cb.BoundsSlot = wantBounds ? boundsSlot : 0u;
-
-	const uint32_t indexCount = triangleCount * 3;
-	uint32_t clusterTris = kClusterTrisBase;
-	uint32_t clusterCount = (indexCount / 3 + clusterTris - 1) / std::max(clusterTris, 1u);
-	if (clusterCount > kClusterGroup) {
-		clusterTris = (indexCount / 3 + kClusterGroup - 1) / kClusterGroup;
-		clusterCount = (indexCount / 3 + clusterTris - 1) / std::max(clusterTris, 1u);
-	}
-	bool wantClusters = smoothClusterCS && gameIB && indexCount >= 3 && EnsureClusterResources(clusterScratchNeeded);
-	uint32_t clusterSlot = UINT32_MAX;
-	uint32_t poolOffset = UINT32_MAX;
-	if (wantClusters) {
-		clusterSlot = clusterFree.Allocate(clusterCount);
-		if (clusterSlot != UINT32_MAX)
-			poolOffset = clusterIndexPoolFree.Allocate(indexCount, 8);
-		if (poolOffset == UINT32_MAX) {
-			if (clusterSlot != UINT32_MAX)
-				clusterFree.Release(clusterSlot, clusterCount);
-			wantClusters = false;
-		}
-	}
-	cb.IndexPoolOffset = wantClusters ? poolOffset : 0u;
-	cb.IndexCount = wantClusters ? indexCount : 0u;
-	cb.ClusterOffset = wantClusters ? clusterSlot : 0u;
-	cb.ClusterStrideIndices = clusterTris * 3;
-	smoothCB->Update(cb);
-
-	if (wantClusters) {
-		D3D11_BOX box{};
-		box.left = 0;
-		box.right = indexCount * 2;
-		box.bottom = 1;
-		box.back = 1;
-		context->CopySubresourceRegion(clusterIndexPool->resource.get(), 0, poolOffset * 2, 0, 0, gameIB, 0, &box);
-	}
-
-	ID3D11Buffer* cscb = smoothCB->CB();
-	context->CSSetConstantBuffers(0, 1, &cscb);
-	ID3D11ShaderResourceView* csSRV = smoothSourceSRV.get();
-	context->CSSetShaderResources(0, 1, &csSRV);
-	ID3D11UnorderedAccessView* csUAVs[2] = { tableUAV, smoothedNormalsChunks[chunk].uav.get() };
-	context->CSSetUnorderedAccessViews(0, 2, csUAVs, nullptr);
-	const uint32_t groups = (vertexCount + 63) / 64;
-	context->CSSetShader(smoothAccumulateCS.get(), nullptr, 0);
-	context->Dispatch(groups, 1, 1);
-	context->CSSetShader(smoothResolveCS.get(), nullptr, 0);
-	context->Dispatch(groups, 1, 1);
-	context->CSSetShader(smoothFlatStatsCS.get(), nullptr, 0);
-	context->Dispatch(1, 1, 1);
-	if (wantBounds) {
-		ID3D11UnorderedAccessView* boundsUAV = meshBounds->uav.get();
-		context->CSSetUnorderedAccessViews(2, 1, &boundsUAV, nullptr);
-		context->CSSetShader(smoothBoundsCS.get(), nullptr, 0);
-		context->Dispatch(1, 1, 1);
-		ID3D11UnorderedAccessView* nullBoundsUAV = nullptr;
-		context->CSSetUnorderedAccessViews(2, 1, &nullBoundsUAV, nullptr);
-		entry.boundsSlot = boundsSlot;
-	}
-	if (wantClusters) {
-		ID3D11ShaderResourceView* poolSRV = clusterIndexPool->srv.get();
-		context->CSSetShaderResources(1, 1, &poolSRV);
-		ID3D11UnorderedAccessView* clusterUAV = clusterBounds->uav.get();
-		context->CSSetUnorderedAccessViews(3, 1, &clusterUAV, nullptr);
-		context->CSSetShader(smoothClusterCS.get(), nullptr, 0);
-		context->Dispatch((clusterCount + 63) / 64, 1, 1);
-		ID3D11ShaderResourceView* nullPoolSRV = nullptr;
-		context->CSSetShaderResources(1, 1, &nullPoolSRV);
-		ID3D11UnorderedAccessView* nullClusterUAV = nullptr;
-		context->CSSetUnorderedAccessViews(3, 1, &nullClusterUAV, nullptr);
-		entry.clusterOffset = clusterSlot;
-		entry.clusterCount = clusterCount;
-		entry.indexPoolOffset = poolOffset;
-		entry.indexCount = indexCount;
-	}
-
-	ID3D11ShaderResourceView* nullCsSRV = nullptr;
-	context->CSSetShaderResources(0, 1, &nullCsSRV);
-	ID3D11UnorderedAccessView* nullCsUAVs[2] = { nullptr, nullptr };
-	context->CSSetUnorderedAccessViews(0, 2, nullCsUAVs, nullptr);
-	context->CSSetShader(nullptr, nullptr, 0);
-
-	entry.srv = outSRV;
-	entry.ready = true;
-	return &entry;
-}
-
-void SnowDeformation::DrawCapturedStatics()
-{
-	if (SnowShadersPending(2))
-		return;
-	if (capturedStatics.empty()) {
-		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Setup & Cull");
-		return;
-	}
-	if (globals::state->isMapMenuOpen || !EnsureStaticsShaders())
-		return;
-
-	auto* fillVS = GetShellFillVS();
-	auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
-	auto mainDepthSRV = globals::game::renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN].depthSRV;
-	const bool prepass = staticsPSPrepassNoDepth && fillPS && mainDepthSRV && EnsurePrepassResources(mainDepthSRV);
-	bool fillPreSnow = false;
-	if (preSnowDepthDeferred) {
-		preSnowDepthDeferred = false;
-		D3D11_VIEWPORT vp0{};
-		UINT vpOne = 1;
-		globals::d3d::context->RSGetViewports(&vpOne, &vp0);
-		D3D11_TEXTURE2D_DESC preDesc{};
-		preSnowDepth->GetDesc(&preDesc);
-		const D3D11_BOX fillBox = ScreenRectBox(vpOne ? &vp0 : nullptr, preDesc.Width, preDesc.Height, 0);
-		const bool wholePixels = vpOne && vp0.TopLeftX == std::floor(vp0.TopLeftX) && vp0.TopLeftY == std::floor(vp0.TopLeftY) &&
-		                         vp0.Width == std::floor(vp0.Width) && vp0.Height == std::floor(vp0.Height);
-		fillPreSnow = prepass && preSnowDepthRTV && GetShellFillPSPreSnow() && wholePixels &&
-		              std::memcmp(&fillBox, &preSnowRect, sizeof(D3D11_BOX)) == 0;
-		if (!fillPreSnow)
-			TakePreSnowCopy(globals::d3d::context, mainDepthSRV);
-	}
-
-	auto context = globals::d3d::context;
-
-	context->PSSetShader(staticsPS.get(), nullptr, 0);
-	ID3D11PixelShader* boundStaticsPS = staticsPS.get();
-	ID3D11Buffer* cb1 = staticsCB->CB();
-	context->VSSetConstantBuffers(1, 1, &cb1);
-	context->PSSetConstantBuffers(1, 1, &cb1);
-
-	const bool tessellateSkins = staticsTessVS && staticsHS && staticsDS;
-	bool skinStagesTess = false;
-	bool skinVSParallax = false;
-	auto bindSkinStages = [&](bool a_tess) {
-		skinStagesTess = a_tess;
-		skinVSParallax = false;
-		if (a_tess) {
-			context->VSSetShader(staticsTessVS.get(), nullptr, 0);
-			context->HSSetShader(staticsHS.get(), nullptr, 0);
-			context->DSSetShader(staticsDS.get(), nullptr, 0);
-			ID3D11Buffer* cb0 = shellCB->CB();
-			context->HSSetConstantBuffers(0, 1, &cb0);
-			context->DSSetConstantBuffers(0, 1, &cb0);
-			ID3D11Buffer* dsCB1 = staticsCB->CB();
-			context->HSSetConstantBuffers(1, 1, &dsCB1);
-			context->DSSetConstantBuffers(1, 1, &dsCB1);
-			ID3D11ShaderResourceView* hsConeSRV = (objectSnowCone && objectSnowCone->srv) ? objectSnowCone->srv.get() : nullptr;
-			context->HSSetShaderResources(13, 1, &hsConeSRV);
-			ID3D11ShaderResourceView* dsDeformSRV = GetDeformationSRV();
-			context->DSSetShaderResources(1, 1, &dsDeformSRV);
-			ID3D11ShaderResourceView* dsHeightSRV = shellSnowHeightSRV.get();
-			context->DSSetShaderResources(8, 1, &dsHeightSRV);
-			ID3D11SamplerState* dsSampler = shellSnowSampler.get();
-			context->DSSetSamplers(0, 1, &dsSampler);
-			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST);
-		} else {
-			context->VSSetShader(staticsVS.get(), nullptr, 0);
-			context->HSSetShader(nullptr, nullptr, 0);
-			context->DSSetShader(nullptr, nullptr, 0);
-			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-		}
-	};
-	bindSkinStages(tessellateSkins);
-
-	globals::profiler->BeginPass("SnowDeformation::Objects - Setup & Cull");
-	static std::unordered_set<std::string> loggedSkips;
-	auto logSkip = [](RE::BSGeometry* a_geometry, const char* a_reason) {
-		if (loggedSkips.size() < 24 && loggedSkips.insert(std::string(a_geometry->name.c_str()) + a_reason).second)
-			logger::info("[SNOW DEFORMATION] Statics skip '{}': {}", a_geometry->name.c_str(), a_reason);
-	};
-
-	ID3D11ShaderResourceView* objectTopSRV = (heightTopRaw[heightCurrent] && heightTopRaw[heightCurrent]->srv) ?
-	                                             heightTopRaw[heightCurrent]->srv.get() :
-	                                             nullptr;
-	context->PSSetShaderResources(11, 1, &objectTopSRV);
-	ID3D11ShaderResourceView* untouchedSRV = untouchedTilesSRV.get();
-	context->PSSetShaderResources(kUntouchedTilesSlot, 1, &untouchedSRV);
-	ID3D11ShaderResourceView* sceneDepthSRV = Util::GetCurrentSceneDepthSRV(false);
-	context->PSSetShaderResources(3, 1, &sceneDepthSRV);
-	ID3D11ShaderResourceView* skinDepthPSSRV = (heightSkinDepth && heightSkinDepth->srv) ?
-	                                               heightSkinDepth->srv.get() :
-	                                               nullptr;
-	context->PSSetShaderResources(12, 1, &skinDepthPSSRV);
-	if (globals::features::ibl.loaded && globals::features::ibl.envIBLTexture && globals::features::ibl.skyIBLTexture) {
-		ID3D11ShaderResourceView* iblSRVs[2] = { globals::features::ibl.envIBLTexture->srv.get(), globals::features::ibl.skyIBLTexture->srv.get() };
-		context->PSSetShaderResources(76, 2, iblSRVs);
-	}
-	context->VSSetShaderResources(11, 1, &objectTopSRV);
-	context->DSSetShaderResources(11, 1, &objectTopSRV);
-	ID3D11ShaderResourceView* coneSRV = (objectSnowCone && objectSnowCone->srv) ? objectSnowCone->srv.get() : nullptr;
-	context->VSSetShaderResources(13, 1, &coneSRV);
-	context->DSSetShaderResources(13, 1, &coneSRV);
-	context->PSSetShaderResources(13, 1, &coneSRV);
-	ID3D11ShaderResourceView* landFineSRV = (shellFineValid && shellTerrainFine) ? shellTerrainFine->srv.get() : nullptr;
-	context->PSSetShaderResources(52, 1, &landFineSRV);
-	ID3D11ShaderResourceView* fineTopSRV = (FineLevelOn() && heightTopRawFine && heightTopRawFine->srv) ? heightTopRawFine->srv.get() : nullptr;
-	context->VSSetShaderResources(34, 1, &fineTopSRV);
-	context->DSSetShaderResources(34, 1, &fineTopSRV);
-	context->PSSetShaderResources(34, 1, &fineTopSRV);
-	ID3D11ShaderResourceView* farTopSRV = (farHalfExtentLive > 0.0f && heightTopRawFar && heightTopRawFar->srv) ? heightTopRawFar->srv.get() : nullptr;
-	context->VSSetShaderResources(40, 1, &farTopSRV);
-	context->DSSetShaderResources(40, 1, &farTopSRV);
-	context->PSSetShaderResources(40, 1, &farTopSRV);
-	context->HSSetShaderResources(40, 1, &farTopSRV);
-	ID3D11ShaderResourceView* skinExclusionSRV = GetExclusionFieldSRV();
-	context->PSSetShaderResources(15, 1, &skinExclusionSRV);
-	ID3D11ShaderResourceView* projNoiseSRV = SD_ProjNoiseMapSRV();
-	context->PSSetShaderResources(21, 1, &projNoiseSRV);
-	ID3D11ShaderResourceView* skinMasksSRV = landMasksCopySRV.get();
-	context->PSSetShaderResources(32, 1, &skinMasksSRV);
-	ID3D11ShaderResourceView* preDecalSRV = preDecalMasksSRV.get();
-	context->PSSetShaderResources(53, 1, &preDecalSRV);
-	ID3D11ShaderResourceView* gameShadowMaskSRV = globals::game::renderer->GetRuntimeData().renderTargets[RE::RENDER_TARGET::kSHADOW_MASK].SRV;
-	context->PSSetShaderResources(24, 1, &gameShadowMaskSRV);
-
-	ID3D11DepthStencilState* boundDepthState = nullptr;
-
-	ID3D11RenderTargetView* rawRTVs[8] = {};
-	ID3D11DepthStencilView* rawDSV = nullptr;
-	context->OMGetRenderTargets(8, rawRTVs, &rawDSV);
-	winrt::com_ptr<ID3D11RenderTargetView> rtvs[8];
-	ID3D11RenderTargetView* rtvPtrs[8] = {};
-	for (uint32_t i = 0; i < 8; i++) {
-		rtvs[i].attach(rawRTVs[i]);
-		rtvPtrs[i] = rtvs[i].get();
-	}
-	winrt::com_ptr<ID3D11DepthStencilView> dsv;
-	dsv.attach(rawDSV);
-	D3D11_VIEWPORT vps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
-	UINT vpCount = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-	context->RSGetViewports(&vpCount, vps);
-	D3D11_VIEWPORT fillVps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
-	for (UINT i = 0; i < vpCount; i++) {
-		fillVps[i] = vps[i];
-		fillVps[i].MinDepth = 0.0f;
-		fillVps[i].MaxDepth = 1.0f;
-	}
-	D3D11_VIEWPORT decalVps[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE]{};
-	for (UINT i = 0; i < vpCount; i++) {
-		decalVps[i] = vps[i];
-		decalVps[i].MaxDepth = kDecalViewportMaxDepth;
-	}
-
-	struct SkinDraw
-	{
-		const CapturedSnowStatic* cap;
-		RE::BSGeometry* geometry;
-		ID3D11Buffer* vb;
-		ID3D11Buffer* ib;
-		ID3D11InputLayout* layout;
-		UINT stride;
-		uint32_t indexCount;
-		float vertexCount;
-		bool s4Shell;
-		uint32_t slot;
-		uint32_t boundsSlot;
-		uint32_t clusterOffset;
-		uint32_t clusterCount;
-		uint32_t indexPoolOffset;
-		uint32_t scratchBase;
-		bool decalDepth;
-		ID3D11ShaderResourceView* smoothSRV;
-		ID3D11InputLayout* layoutParallax;
-	};
-	std::vector<SkinDraw> skinDraws;
-	skinDraws.reserve(capturedStatics.size());
-	const bool coatParallax = settings.SnowFollowsParallax && EnsureCoatParallaxShaders();
-	EnsureClusterResources(clusterScratchNeeded);
-	uint32_t scratchNext = 0;
-	uint32_t scratchWanted = 0;
-	for (auto& cap : capturedStatics) {
-		auto* geometry = cap.geometry.get();
-		if (!geometry)
-			continue;
-		const bool s4Shell = !cap.road && cap.projThreshold > -0.9f && projNoiseSRV;
-		if (!cap.road && !s4Shell)
-			continue;
-		auto triShape = geometry->AsTriShape();
-		if (!triShape) {
-			logSkip(geometry, "not a BSTriShape");
-			continue;
-		}
-		auto rendererData = geometry->GetGeometryRuntimeData().rendererData;
-		if (!rendererData || !rendererData->vertexBuffer || !rendererData->indexBuffer) {
-			logSkip(geometry, "no renderer buffers");
-			continue;
-		}
-		uint32_t indexCount = uint32_t(triShape->GetTrishapeRuntimeData().triangleCount) * 3;
-		if (indexCount == 0) {
-			logSkip(geometry, "zero triangles");
-			continue;
-		}
-
-		auto desc = rendererData->vertexDesc;
-		if (!desc.HasFlag(RE::BSGraphics::Vertex::VF_VERTEX) || !desc.HasFlag(RE::BSGraphics::Vertex::VF_NORMAL)) {
-			logSkip(geometry, "vertex format lacks POSITION/NORMAL");
-			continue;
-		}
-
-		uint64_t descKey;
-		memcpy(&descKey, &desc, sizeof(descKey));
-		auto* layout = StaticsInputLayoutFor(descKey, desc);
-		if (!layout)
-			continue;
-
-		if (!cap.road && !settings.ProjSnowMatch)
-			continue;
-
-		UINT stride = uint32_t(descKey & 0xF) * 4;
-		if (stride == 0 || desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_NORMAL) >= stride) {
-			logSkip(geometry, "implausible stride/offset");
-			continue;
-		}
-		const auto* smooth = SmoothedNormalsFor(cap);
-		const bool cached = smooth && smooth->ready;
-		ID3D11ShaderResourceView* smoothSRV = cached ? smooth->srv.get() : nullptr;
-		uint32_t cOffset = 0, cCount = 0, cPool = 0, cBase = 0;
-		if (cached && smooth->clusterCount != 0)
-			scratchWanted += smooth->indexCount;
-		if (cached && smooth->clusterCount != 0 &&
-			scratchNext + smooth->indexCount <= clusterScratchCapacity) {
-			cOffset = smooth->clusterOffset;
-			cCount = smooth->clusterCount;
-			cPool = smooth->indexPoolOffset;
-			cBase = scratchNext;
-			scratchNext += smooth->indexCount;
-		}
-		skinDraws.push_back({ &cap, geometry,
-			reinterpret_cast<ID3D11Buffer*>(rendererData->vertexBuffer),
-			reinterpret_cast<ID3D11Buffer*>(rendererData->indexBuffer),
-			layout, stride, indexCount,
-			float(triShape->GetTrishapeRuntimeData().vertexCount), s4Shell,
-			uint32_t(skinDraws.size()), cached ? smooth->boundsSlot : UINT32_MAX,
-			cOffset, cCount, cPool, cBase, cap.decalDepth, smoothSRV,
-			(coatParallax && s4Shell && cap.parallaxSRV) ? StaticsParallaxInputLayoutFor(descKey, desc) : nullptr });
-	}
-
-	auto statsRow = [](const char* a_name) {
-		globals::profiler->EndPass();
-		globals::profiler->BeginPass(a_name);
-	};
-	auto* hiZBuild = GetHiZBuildCS();
-	auto* skinCull = hiZBuild ? GetSnowCS(kSkinCullCS) : nullptr;
-	const uint32_t hiZExtentW = vpCount == 0 ? UINT32_MAX : uint32_t(std::ceil(vps[0].TopLeftX + vps[0].Width));
-	const uint32_t hiZExtentH = vpCount == 0 ? UINT32_MAX : uint32_t(std::ceil(vps[0].TopLeftY + vps[0].Height));
-	const bool cullActive = skinCull && !skinDraws.empty() && mainDepthSRV && vpCount > 0 &&
-	                        EnsureSkinCullResources(uint32_t(skinDraws.size()), mainDepthSRV, hiZExtentW, hiZExtentH);
-	bool skinFootprintLive = false;
-	if (cullActive) {
-		const float liftMargin = settings.RoadMeshesDepth + kSkinCullMargin;
-		uint32_t clusterSkins = 0;
-		for (const auto& d : skinDraws) {
-			if (d.clusterCount != 0)
-				clusterSkins++;
-		}
-		clusterScratchNeeded = scratchWanted;
-		const float skinFadeEnd = SkinFadeEndUnits();
-		D3D11_MAPPED_SUBRESOURCE mapped{};
-		if (SUCCEEDED(context->Map(skinCullBounds->resource.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
-			auto* out = static_cast<SkinCullBound*>(mapped.pData);
-			for (const auto& d : skinDraws) {
-				const auto& wb = d.geometry->worldBound;
-				const auto& rot = d.cap->world.rotate;
-				const float scale = d.cap->world.scale;
-				const bool hasBounds = d.boundsSlot != UINT32_MAX && meshBounds && meshBounds->srv;
-				out[d.slot] = { { wb.center.x, wb.center.y, wb.center.z }, wb.radius + liftMargin, d.indexCount,
-					hasBounds ? d.boundsSlot : 0u, hasBounds ? 1u : 0u, liftMargin,
-					d.clusterOffset, d.clusterCount, d.indexPoolOffset, d.scratchBase,
-					{ rot.entry[0][0] * scale, rot.entry[0][1] * scale, rot.entry[0][2] * scale, d.cap->world.translate.x },
-					{ rot.entry[1][0] * scale, rot.entry[1][1] * scale, rot.entry[1][2] * scale, d.cap->world.translate.y },
-					{ rot.entry[2][0] * scale, rot.entry[2][1] * scale, rot.entry[2][2] * scale, d.cap->world.translate.z },
-					d.cap->fadeExempt ? 0.0f : skinFadeEnd };
-			}
-			context->Unmap(skinCullBounds->resource.get(), 0);
-		}
-		SkinCullCB ccb{};
-		const auto& fb = globals::game::frameBufferCached;
-		ccb.ViewProj = fb.GetCameraViewProj();
-		ccb.CameraPosAdjust = fb.GetCameraPosAdjust();
-		ccb.Viewport = { vps[0].TopLeftX, vps[0].TopLeftY, vps[0].Width, vps[0].Height };
-		ccb.Depth = { vps[0].MinDepth, vps[0].MaxDepth, kSkinCullDepthEps, float(skinCullLevels) };
-		ccb.SkinCount = uint32_t(skinDraws.size());
-
-		context->OMSetRenderTargets(0, nullptr, nullptr);
-		ID3D11Buffer* cullCB = skinCullCB->CB();
-		context->CSSetConstantBuffers(0, 1, &cullCB);
-		ID3D11ShaderResourceView* nullCullSRVs[4] = {};
-		ID3D11UnorderedAccessView* nullCullUAVs[2] = {};
-		auto* hiZBuildUAV = GetHiZBuildCS(true);
-		if (hiZBuildUAV && skinCullHiZUAVs.size() == skinCullLevels) {
-			ccb.Level = 0.0f;
-			skinCullCB->Update(ccb);
-			context->CSSetShader(hiZBuild, nullptr, 0);
-			ID3D11UnorderedAccessView* mip0 = skinCullHiZUAVs[0].get();
-			context->CSSetShaderResources(1, 1, &mainDepthSRV);
-			context->CSSetUnorderedAccessViews(2, 1, &mip0, nullptr);
-			context->Dispatch((skinCullHiZ->desc.Width + 7) / 8, (skinCullHiZ->desc.Height + 7) / 8, 1);
-			context->CSSetShaderResources(1, 1, nullCullSRVs);
-			context->CSSetUnorderedAccessViews(2, 1, nullCullUAVs, nullptr);
-			context->CSSetShader(hiZBuildUAV, nullptr, 0);
-			for (uint32_t level = 1; level < skinCullLevels; level++) {
-				ID3D11UnorderedAccessView* prev = skinCullHiZUAVs[level - 1].get();
-				ID3D11UnorderedAccessView* dst = skinCullHiZUAVs[level].get();
-				context->CSSetUnorderedAccessViews(6, 1, &prev, nullptr);
-				context->CSSetUnorderedAccessViews(2, 1, &dst, nullptr);
-				const uint32_t w = std::max(1u, skinCullHiZ->desc.Width >> level);
-				const uint32_t h = std::max(1u, skinCullHiZ->desc.Height >> level);
-				context->Dispatch((w + 7) / 8, (h + 7) / 8, 1);
-			}
-			context->CSSetUnorderedAccessViews(6, 1, nullCullUAVs, nullptr);
-			context->CSSetUnorderedAccessViews(2, 1, nullCullUAVs, nullptr);
-		} else {
-			context->CSSetShader(hiZBuild, nullptr, 0);
-			for (uint32_t level = 0; level < skinCullLevels; level++) {
-				ccb.Level = float(level);
-				skinCullCB->Update(ccb);
-				ID3D11ShaderResourceView* src = level == 0 ? mainDepthSRV : skinCullHiZSRVs[level - 1].get();
-				ID3D11UnorderedAccessView* dst = skinCullHiZScratch[level]->uav.get();
-				context->CSSetShaderResources(1, 1, &src);
-				context->CSSetUnorderedAccessViews(2, 1, &dst, nullptr);
-				const auto& sd = skinCullHiZScratch[level]->desc;
-				context->Dispatch((sd.Width + 7) / 8, (sd.Height + 7) / 8, 1);
-				context->CSSetShaderResources(1, 1, nullCullSRVs);
-				context->CSSetUnorderedAccessViews(2, 1, nullCullUAVs, nullptr);
-				context->CopySubresourceRegion(skinCullHiZ->resource.get(), level, 0, 0, 0, skinCullHiZScratch[level]->resource.get(), 0, nullptr);
-			}
-		}
-
-		context->CSSetShader(skinCull, nullptr, 0);
-		ID3D11ShaderResourceView* cullSRVs[3] = { skinCullBounds->srv.get(), skinCullHiZ->srv.get(),
-			meshBounds ? meshBounds->srv.get() : nullptr };
-		context->CSSetShaderResources(2, 3, cullSRVs);
-		ID3D11UnorderedAccessView* argsUAV = skinCullArgs->uav.get();
-		context->CSSetUnorderedAccessViews(3, 1, &argsUAV, nullptr);
-		ID3D11UnorderedAccessView* footprintUAV = skinFootprint->uav.get();
-		const UINT footprintClear[4] = {};
-		context->ClearUnorderedAccessViewUint(footprintUAV, footprintClear);
-		context->CSSetUnorderedAccessViews(7, 1, &footprintUAV, nullptr);
-		context->Dispatch((uint32_t(skinDraws.size()) + 63) / 64, 1, 1);
-
-		auto* clusterCull = clusterSkins > 0 ? GetSnowCS(kClusterCullCS) : nullptr;
-		const bool clusterPass = clusterCull && clusterScratchIB && clusterScratchIB->uav;
-		skinFootprintLive = clusterSkins == 0 || clusterPass;
-		if (clusterPass) {
-			ID3D11ShaderResourceView* clusterSRVs[2] = { clusterBounds->srv.get(), clusterIndexPool->srv.get() };
-			context->CSSetShaderResources(5, 2, clusterSRVs);
-			ID3D11UnorderedAccessView* scratchUAV = clusterScratchIB->uav.get();
-			context->CSSetUnorderedAccessViews(4, 1, &scratchUAV, nullptr);
-			context->CSSetShader(clusterCull, nullptr, 0);
-			context->Dispatch(uint32_t(skinDraws.size()), 1, 1);
-			ID3D11UnorderedAccessView* nullScratchUAV = nullptr;
-			context->CSSetUnorderedAccessViews(4, 1, &nullScratchUAV, nullptr);
-			context->CSSetShaderResources(5, 2, nullCullSRVs);
-		}
-		context->CSSetShaderResources(1, 4, nullCullSRVs);
-		context->CSSetUnorderedAccessViews(2, 2, nullCullUAVs, nullptr);
-		context->CSSetUnorderedAccessViews(7, 1, nullCullUAVs, nullptr);
-		context->CSSetShader(nullptr, nullptr, 0);
-
-		context->OMSetRenderTargets(8, rtvPtrs, dsv.get());
-	}
-
-	static std::vector<StaticsCB> sSkinRecords;
-	sSkinRecords.assign(skinDraws.size(), StaticsCB{});
-	auto& skinRecords = sSkinRecords;
-	std::vector<ID3D11ShaderResourceView*> skinSmoothSRVs(skinDraws.size(), nullptr);
-	for (size_t si = 0; si < skinDraws.size(); si++) {
-		const auto& d = skinDraws[si];
-		skinSmoothSRVs[si] = d.smoothSRV;
-		FillSkinDrawCB(*d.cap, d.s4Shell, d.vertexCount,
-			skinSmoothSRVs[si] != nullptr, objectTopSRV != nullptr, skinRecords[si]);
-		if (d.layoutParallax) {
-			skinRecords[si].ObjParallaxUV = d.cap->parallaxUV;
-			skinRecords[si].ObjParallax = d.cap->parallax;
-		}
-		skinRecords[si].DebugSkinId = 0.0f;
-	}
-	const bool skinRecordsLive = !skinRecords.empty() && UploadStaticsRecords(skinRecords.data(), (uint32_t)skinRecords.size());
-	uint32_t skinParity = 0;
-
-	auto drawSkins = [&](bool a_prepass) {
-		boundStaticsPS = nullptr;
-		uint32_t drawIndex = 0;
-		bool boundDecal = false;
-		ID3D11ShaderResourceView* boundParallaxSRV = nullptr;
-		SD_DrawBinds binds;
-		for (const auto& d : skinDraws) {
-			const auto& cap = *d.cap;
-			const uint32_t recordIndex = drawIndex++;
-			const bool needsDepth = cap.road;
-			if (a_prepass && needsDepth)
-				continue;
-			if (d.decalDepth != boundDecal) {
-				boundDecal = d.decalDepth;
-				context->RSSetState(GetSkinRasterState(boundDecal));
-				if (vpCount)
-					context->RSSetViewports(vpCount, boundDecal ? decalVps : vps);
-			}
-			[[maybe_unused]] auto* geometry = d.geometry;
-			binds.Layout(context, d.layoutParallax ? d.layoutParallax : d.layout);
-			binds.Vertex(context, d.vb, d.stride);
-			if (cullActive && d.clusterCount != 0)
-				binds.Index(context, clusterScratchIB->resource.get(), DXGI_FORMAT_R32_UINT);
-			else
-				binds.Index(context, d.ib, DXGI_FORMAT_R16_UINT);
-
-			ID3D11ShaderResourceView* skinSmoothSRV = skinSmoothSRVs[recordIndex];
-			binds.Smooth(context, skinSmoothSRV);
-			const bool wantTess = tessellateSkins && !d.s4Shell;
-			if (wantTess != skinStagesTess)
-				bindSkinStages(wantTess);
-			const bool wantParallaxVS = !wantTess && d.layoutParallax != nullptr;
-			if (wantParallaxVS != skinVSParallax) {
-				context->VSSetShader(wantParallaxVS ? staticsVSParallax.get() : staticsVS.get(), nullptr, 0);
-				skinVSParallax = wantParallaxVS;
-			}
-			if (!a_prepass) {
-				ID3D11ShaderResourceView* parallaxSRV = d.layoutParallax ? cap.parallaxSRV.get() : nullptr;
-				if (parallaxSRV != boundParallaxSRV) {
-					context->PSSetShaderResources(59, 1, &parallaxSRV);
-					boundParallaxSRV = parallaxSRV;
-				}
-			}
-			if (skinRecordsLive) {
-				BindStaticsRecord(recordIndex, true, wantTess, skinParity);
-			} else {
-				staticsCB->Update(skinRecords[recordIndex]);
-			}
-
-			const bool drapePS = d.s4Shell;
-			ID3D11PixelShader* drapeShadePS = d.layoutParallax ? staticsPSDrapeParallax.get() : staticsPSDrapeNoDepth.get();
-			ID3D11PixelShader* wantPS = nullptr;
-			if (a_prepass)
-				wantPS = (drapePS && staticsPSDrapePrepass) ? staticsPSDrapePrepass.get() : staticsPSPrepassNoDepth.get();
-			else if (!needsDepth && staticsPSNoDepth)
-				wantPS = (drapePS && drapeShadePS) ? drapeShadePS : staticsPSNoDepth.get();
-			else
-				wantPS = staticsPS.get();
-			if (wantPS != boundStaticsPS) {
-				context->PSSetShader(wantPS, nullptr, 0);
-				boundStaticsPS = wantPS;
-			}
-			if (prepass && !a_prepass) {
-				ID3D11DepthStencilState* wantDepth = needsDepth ? shellDepthState.get() : shellPrepassMainDepthState.get();
-				if (wantDepth != boundDepthState) {
-					context->OMSetDepthStencilState(wantDepth, 0);
-					boundDepthState = wantDepth;
-				}
-			}
-
-			if (cullActive)
-				context->DrawIndexedInstancedIndirect(skinCullArgs->resource.get(), d.slot * kSkinCullArgStride);
-			else
-				context->DrawIndexed(d.indexCount, 0, 0);
-		}
-		if (boundDecal) {
-			context->RSSetState(GetSkinRasterState());
-			if (vpCount)
-				context->RSSetViewports(vpCount, vps);
-		}
-	};
-
-	if (prepass) {
-		static constexpr UINT kFillFootprintSlot = 62;
-		auto* fillRectVS = skinFootprintLive ? GetShellFillRectVS() : nullptr;
-		auto fill = [&](ID3D11DepthStencilView* a_target, ID3D11ShaderResourceView* a_source, bool a_preSnow, bool a_footprint) {
-			ID3D11RenderTargetView* preSnowRTV = preSnowDepthRTV.get();
-			context->OMSetRenderTargets(a_preSnow ? 1 : 0, a_preSnow ? &preSnowRTV : nullptr, a_target);
-			context->OMSetDepthStencilState(shellFillDepthState.get(), 0);
-			context->RSSetState(shellRasterState.get());
-			if (vpCount)
-				context->RSSetViewports(vpCount, fillVps);
-			context->IASetInputLayout(nullptr);
-			context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-			context->VSSetShader(a_footprint ? fillRectVS : fillVS, nullptr, 0);
-			context->HSSetShader(nullptr, nullptr, 0);
-			context->DSSetShader(nullptr, nullptr, 0);
-			context->PSSetShaderResources(9, 1, &a_source);
-			context->PSSetShader(a_preSnow ? GetShellFillPSPreSnow() : fillPS, nullptr, 0);
-			if (a_footprint) {
-				winrt::com_ptr<ID3D11ShaderResourceView> savedFootprintSRV;
-				context->VSGetShaderResources(kFillFootprintSlot, 1, savedFootprintSRV.put());
-				ID3D11ShaderResourceView* footprintSRV = skinFootprint->srv.get();
-				context->VSSetShaderResources(kFillFootprintSlot, 1, &footprintSRV);
-				context->Draw(6, 0);
-				footprintSRV = savedFootprintSRV.get();
-				context->VSSetShaderResources(kFillFootprintSlot, 1, &footprintSRV);
-			} else {
-				context->Draw(3, 0);
-			}
-			ID3D11ShaderResourceView* nullFillSRV = nullptr;
-			context->PSSetShaderResources(9, 1, &nullFillSRV);
-			if (vpCount)
-				context->RSSetViewports(vpCount, vps);
-			if (auto* skinRaster = GetSkinRasterState())
-				context->RSSetState(skinRaster);
-			bindSkinStages(skinStagesTess);
-		};
-
-		statsRow("SnowDeformation::Objects - Depth Prepass");
-		const bool firstFillFootprint = fillRectVS && !fillPreSnow;
-		fill(shellTestDepthDSV.get(), mainDepthSRV, fillPreSnow, firstFillFootprint);
-		if (fillPreSnow) {
-			globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Depth & Mask Copies");
-			preSnowDepthThisFrame = true;
-		}
-		context->OMSetRenderTargets(0, nullptr, shellTestDepthDSV.get());
-		context->OMSetDepthStencilState(shellDepthState.get(), 0);
-		context->PSSetShaderResources(43, 1, &mainDepthSRV);
-		drawSkins(true);
-		ID3D11ShaderResourceView* nullPreSkinSRV = nullptr;
-		context->PSSetShaderResources(43, 1, &nullPreSkinSRV);
-		statsRow("SnowDeformation::Objects - Shading");
-
-		context->OMSetRenderTargets(8, rtvPtrs, shellTestDepthDSV.get());
-		boundDepthState = nullptr;
-		drawSkins(false);
-
-		statsRow("SnowDeformation::Objects - Depth Prepass");
-		fill(dsv.get(), shellTestDepthSRV.get(), false, fillRectVS != nullptr);
-		context->OMSetRenderTargets(8, rtvPtrs, dsv.get());
-		context->OMSetDepthStencilState(shellDepthState.get(), 0);
-	} else {
-		statsRow("SnowDeformation::Objects - Shading");
-		drawSkins(false);
-	}
-	globals::profiler->EndPass();
-
-	if (skinRecordsLive) {
-		ID3D11Buffer* restore = staticsCB->CB();
-		context->VSSetConstantBuffers(1, 1, &restore);
-		context->PSSetConstantBuffers(1, 1, &restore);
-		context->HSSetConstantBuffers(1, 1, &restore);
-		context->DSSetConstantBuffers(1, 1, &restore);
-	}
-
-	if (tessellateSkins) {
-		context->HSSetShader(nullptr, nullptr, 0);
-		context->DSSetShader(nullptr, nullptr, 0);
-		context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	}
-
-	ID3D11Buffer* nullVB = nullptr;
-	UINT zero = 0;
-	context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
-	context->IASetIndexBuffer(nullptr, DXGI_FORMAT_R16_UINT, 0);
-	context->IASetInputLayout(nullptr);
-	ID3D11ShaderResourceView* nullSmoothSRV = nullptr;
-	context->VSSetShaderResources(10, 1, &nullSmoothSRV);
-	context->VSSetShaderResources(11, 1, &nullSmoothSRV);
-	context->DSSetShaderResources(11, 1, &nullSmoothSRV);
-	context->PSSetShaderResources(11, 1, &nullSmoothSRV);
-	context->PSSetShaderResources(3, 1, &nullSmoothSRV);
-	context->VSSetShaderResources(13, 1, &nullSmoothSRV);
-	context->DSSetShaderResources(13, 1, &nullSmoothSRV);
-	context->PSSetShaderResources(13, 1, &nullSmoothSRV);
-	context->PSSetShaderResources(59, 1, &nullSmoothSRV);
-	context->HSSetShaderResources(13, 1, &nullSmoothSRV);
-	context->PSSetShaderResources(21, 1, &nullSmoothSRV);
-	context->PSSetShaderResources(24, 1, &nullSmoothSRV);
-	context->PSSetShaderResources(32, 1, &nullSmoothSRV);
-	context->PSSetShaderResources(52, 1, &nullSmoothSRV);
-
-	ID3D11ShaderResourceView* nullUntouchedSRV = nullptr;
-	context->PSSetShaderResources(kUntouchedTilesSlot, 1, &nullUntouchedSRV);
-	ID3D11Buffer* nullCB = nullptr;
-	context->VSSetConstantBuffers(1, 1, &nullCB);
-	context->PSSetConstantBuffers(1, 1, &nullCB);
 }
 
 void SnowDeformation::RenderExclusionField(const ExclusionsCB& a_list)
@@ -3348,54 +1631,16 @@ ID3D11InputLayout* SnowDeformation::ContactSkinInputLayoutFor(uint64_t a_descKey
 ID3D11InputLayout* SnowDeformation::StaticsInputLayoutFor(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc)
 {
 	auto& layout = staticsILCache[a_descKey];
-	if (!layout && staticsVSBlob) {
+	if (!layout && heightVSBlob) {
 		const uint32_t positionBytes = SD_PositionBytes(a_descKey, a_desc);
 
 		D3D11_INPUT_ELEMENT_DESC elements[2] = {
 			{ "POSITION", 0, positionBytes >= 16 ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
 			{ "NORMAL", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, a_desc.GetAttributeOffset(RE::BSGraphics::Vertex::VA_NORMAL), D3D11_INPUT_PER_VERTEX_DATA, 0 },
 		};
-		globals::d3d::device->CreateInputLayout(elements, 2, staticsVSBlob->GetBufferPointer(), staticsVSBlob->GetBufferSize(), layout.put());
+		globals::d3d::device->CreateInputLayout(elements, 2, heightVSBlob->GetBufferPointer(), heightVSBlob->GetBufferSize(), layout.put());
 	}
 	return layout.get();
-}
-
-ID3D11InputLayout* SnowDeformation::StaticsParallaxInputLayoutFor(uint64_t a_descKey, const RE::BSGraphics::VertexDesc& a_desc)
-{
-	using Vertex = RE::BSGraphics::Vertex;
-	if (!staticsVSParallaxBlob || !a_desc.HasFlag(Vertex::VF_UV) || !a_desc.HasFlag(Vertex::VF_TANGENT))
-		return nullptr;
-	auto& layout = staticsILParallaxCache[a_descKey];
-	if (!layout) {
-		const uint32_t positionBytes = SD_PositionBytes(a_descKey, a_desc);
-		D3D11_INPUT_ELEMENT_DESC elements[4] = {
-			{ "POSITION", 0, positionBytes >= 16 ? DXGI_FORMAT_R32G32B32A32_FLOAT : DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
-			{ "TEXCOORD", 0, DXGI_FORMAT_R16G16_FLOAT, 0, a_desc.GetAttributeOffset(Vertex::VA_TEXCOORD0), D3D11_INPUT_PER_VERTEX_DATA, 0 },
-			{ "NORMAL", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, a_desc.GetAttributeOffset(Vertex::VA_NORMAL), D3D11_INPUT_PER_VERTEX_DATA, 0 },
-			{ "BINORMAL", 0, DXGI_FORMAT_R8G8B8A8_UNORM, 0, a_desc.GetAttributeOffset(Vertex::VA_BINORMAL), D3D11_INPUT_PER_VERTEX_DATA, 0 },
-		};
-		globals::d3d::device->CreateInputLayout(elements, 4, staticsVSParallaxBlob->GetBufferPointer(), staticsVSParallaxBlob->GetBufferSize(), layout.put());
-	}
-	return layout.get();
-}
-
-bool SnowDeformation::EnsureCoatParallaxShaders()
-{
-	if (!coatParallaxTried) {
-		coatParallaxTried = true;
-		constexpr auto path = L"Data\\Shaders\\SnowDeformation\\SnowStaticsShell.hlsl";
-		const char* ehfDefine = globals::features::exponentialHeightFog.loaded ? "SNOW_EXP_HEIGHT_FOG" : nullptr;
-		const char* iblDefine = globals::features::ibl.loaded ? "SNOW_IBL" : nullptr;
-		staticsVSParallax.attach(static_cast<ID3D11VertexShader*>(SD_CompileShader(path, "vs_5_0", { "SNOW_COAT_PARALLAX" }, &staticsVSParallaxBlob)));
-		if (staticsVSParallax)
-			Util::SetResourceName(staticsVSParallax.get(), "SnowDeformation::StaticsShellVS Parallax");
-		staticsPSDrapeParallax.attach(static_cast<ID3D11PixelShader*>(SD_CompileShader(path, "ps_5_0", { ehfDefine, iblDefine, "SNOW_STATICS_NO_DEPTH_EXPORT", "SNOW_STATICS_DRAPE", "SNOW_COAT_PARALLAX" })));
-		if (staticsPSDrapeParallax)
-			Util::SetResourceName(staticsPSDrapeParallax.get(), "SnowDeformation::StaticsShellPS Drape Parallax");
-		logger::info("[SNOW DEFORMATION] Snow Follows Parallax coat shaders: VS {}, drape {}",
-			staticsVSParallax ? "ok" : "FAILED", staticsPSDrapeParallax ? "ok" : "FAILED");
-	}
-	return staticsVSParallax && staticsPSDrapeParallax;
 }
 
 void SnowDeformation::GatherWaterObjects()
@@ -4187,161 +2432,6 @@ void SnowDeformation::DrawContactCapture(ID3D11DeviceContext* a_context, bool a_
 	ID3D11RenderTargetView* nullRTV = nullptr;
 	context->OMSetRenderTargets(1, &nullRTV, nullptr);
 	context->RSSetState(savedRaster.get());
-}
-
-ID3D11ComputeShader* SnowDeformation::GetHiZBuildCS(bool a_fromUAV)
-{
-	auto& slot = a_fromUAV ? hiZBuildUAVCS : hiZBuildCS;
-	if (!slot) {
-		std::vector<std::pair<const char*, const char*>> defines;
-		if (a_fromUAV)
-			defines.push_back({ "HIZ_FROM_UAV", "" });
-		slot.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\DepthSyncCS.hlsl", defines, "cs_5_0", "HiZBuildCS")));
-	}
-	return slot.get();
-}
-
-bool SnowDeformation::EnsureSkinCullResources(uint32_t a_count, ID3D11ShaderResourceView* a_mainDepthSRV, uint32_t a_extentW, uint32_t a_extentH)
-{
-	auto device = globals::d3d::device;
-	if (!skinCullCB)
-		skinCullCB = new ConstantBuffer(ConstantBufferDesc<SkinCullCB>(), "SnowDeformation::SkinCullCB");
-
-	winrt::com_ptr<ID3D11Resource> depthRes;
-	a_mainDepthSRV->GetResource(depthRes.put());
-	auto depthTex = depthRes.try_as<ID3D11Texture2D>();
-	if (!depthTex)
-		return false;
-	D3D11_TEXTURE2D_DESC depthDesc{};
-	depthTex->GetDesc(&depthDesc);
-	auto halfExtent = [](uint32_t a_extent, uint32_t a_size) {
-		const uint32_t extent = std::clamp(a_extent, 1u, a_size);
-		return std::max(1u, extent / 2 + ((extent & 1) && extent < a_size ? 1u : 0u));
-	};
-	const uint32_t w0 = halfExtent(a_extentW, depthDesc.Width);
-	const uint32_t h0 = halfExtent(a_extentH, depthDesc.Height);
-	if (skinCullHiZ && (skinCullHiZ->desc.Width != w0 || skinCullHiZ->desc.Height != h0)) {
-		delete skinCullHiZ;
-		skinCullHiZ = nullptr;
-		for (auto* scratch : skinCullHiZScratch)
-			delete scratch;
-		skinCullHiZScratch.clear();
-		skinCullHiZSRVs.clear();
-		skinCullHiZUAVs.clear();
-	}
-	if (!skinCullHiZ) {
-		uint32_t levels = 1;
-		while ((std::max(w0, h0) >> levels) >= 1)
-			levels++;
-		D3D11_TEXTURE2D_DESC desc{};
-		desc.Width = w0;
-		desc.Height = h0;
-		desc.MipLevels = levels;
-		desc.ArraySize = 1;
-		desc.Format = DXGI_FORMAT_R32_FLOAT;
-		desc.SampleDesc.Count = 1;
-		desc.Usage = D3D11_USAGE_DEFAULT;
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-		skinCullHiZ = new Texture2D(desc, "SnowDeformation::SkinCullHiZ");
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = {
-			.Format = desc.Format,
-			.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-			.Texture2D = { .MostDetailedMip = 0, .MipLevels = levels }
-		};
-		skinCullHiZ->CreateSRV(srvDesc);
-		for (uint32_t level = 0; level < levels; level++) {
-			D3D11_TEXTURE2D_DESC scratchDesc = desc;
-			scratchDesc.Width = std::max(1u, w0 >> level);
-			scratchDesc.Height = std::max(1u, h0 >> level);
-			scratchDesc.MipLevels = 1;
-			scratchDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
-			auto* scratch = new Texture2D(scratchDesc, "SnowDeformation::SkinCullHiZ scratch");
-			D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = {
-				.Format = desc.Format,
-				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-				.Texture2D = { .MipSlice = 0 }
-			};
-			scratch->CreateUAV(uavDesc);
-			skinCullHiZScratch.push_back(scratch);
-			D3D11_SHADER_RESOURCE_VIEW_DESC levelSrvDesc = {
-				.Format = desc.Format,
-				.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D,
-				.Texture2D = { .MostDetailedMip = level, .MipLevels = 1 }
-			};
-			winrt::com_ptr<ID3D11ShaderResourceView> srv;
-			if (FAILED(device->CreateShaderResourceView(skinCullHiZ->resource.get(), &levelSrvDesc, srv.put())))
-				return false;
-			Util::SetResourceName(srv.get(), "SnowDeformation::SkinCullHiZ level SRV");
-			skinCullHiZSRVs.push_back(srv);
-			D3D11_UNORDERED_ACCESS_VIEW_DESC levelUavDesc = {
-				.Format = desc.Format,
-				.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D,
-				.Texture2D = { .MipSlice = level }
-			};
-			winrt::com_ptr<ID3D11UnorderedAccessView> uav;
-			if (FAILED(device->CreateUnorderedAccessView(skinCullHiZ->resource.get(), &levelUavDesc, uav.put())))
-				return false;
-			Util::SetResourceName(uav.get(), "SnowDeformation::SkinCullHiZ level UAV");
-			skinCullHiZUAVs.push_back(uav);
-		}
-		skinCullLevels = levels;
-	}
-
-	if (!skinFootprint) {
-		D3D11_BUFFER_DESC footDesc{};
-		footDesc.Usage = D3D11_USAGE_DEFAULT;
-		footDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
-		footDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-		footDesc.ByteWidth = sizeof(uint32_t) * 4;
-		D3D11_SHADER_RESOURCE_VIEW_DESC footSRV{};
-		footSRV.Format = DXGI_FORMAT_R32_TYPELESS;
-		footSRV.ViewDimension = D3D11_SRV_DIMENSION_BUFFEREX;
-		footSRV.BufferEx.NumElements = 4;
-		footSRV.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
-		D3D11_UNORDERED_ACCESS_VIEW_DESC footUAV{};
-		footUAV.Format = DXGI_FORMAT_R32_TYPELESS;
-		footUAV.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-		footUAV.Buffer.NumElements = 4;
-		footUAV.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
-		skinFootprint = new Buffer(footDesc, nullptr, "SnowDeformation::SkinFootprint");
-		skinFootprint->CreateSRV(footSRV);
-		skinFootprint->CreateUAV(footUAV);
-	}
-
-	if (a_count > skinCullCapacity) {
-		const uint32_t capacity = (a_count + 255) & ~255u;
-		delete skinCullBounds;
-		skinCullBounds = nullptr;
-		delete skinCullArgs;
-		skinCullArgs = nullptr;
-
-		D3D11_BUFFER_DESC boundsDesc = StructuredBufferDesc<SkinCullBound>(uint64_t(capacity), false, true);
-		D3D11_SHADER_RESOURCE_VIEW_DESC boundsSRV{};
-		boundsSRV.Format = DXGI_FORMAT_UNKNOWN;
-		boundsSRV.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
-		boundsSRV.Buffer.FirstElement = 0;
-		boundsSRV.Buffer.NumElements = capacity;
-		skinCullBounds = new Buffer(boundsDesc, nullptr, "SnowDeformation::SkinCullBounds");
-		skinCullBounds->CreateSRV(boundsSRV);
-
-		D3D11_BUFFER_DESC argsDesc{};
-		argsDesc.Usage = D3D11_USAGE_DEFAULT;
-		argsDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
-		argsDesc.MiscFlags = D3D11_RESOURCE_MISC_DRAWINDIRECT_ARGS | D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-		argsDesc.ByteWidth = kSkinCullArgStride * capacity;
-		D3D11_UNORDERED_ACCESS_VIEW_DESC argsUAV{};
-		argsUAV.Format = DXGI_FORMAT_R32_TYPELESS;
-		argsUAV.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-		argsUAV.Buffer.FirstElement = 0;
-		argsUAV.Buffer.NumElements = capacity * (kSkinCullArgStride / 4);
-		argsUAV.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
-		skinCullArgs = new Buffer(argsDesc, nullptr, "SnowDeformation::SkinCullArgs");
-		skinCullArgs->CreateUAV(argsUAV);
-
-		skinCullCapacity = capacity;
-	}
-	return skinCullHiZ->srv && skinCullHiZScratch.size() == skinCullLevels && skinCullBounds && skinCullBounds->srv && skinCullArgs && skinCullArgs->uav &&
-	       skinFootprint->srv && skinFootprint->uav;
 }
 
 void SnowDeformation::StartExclusionGather()

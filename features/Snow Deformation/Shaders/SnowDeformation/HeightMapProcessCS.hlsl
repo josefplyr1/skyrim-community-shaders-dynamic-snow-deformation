@@ -2,23 +2,23 @@ cbuffer HeightProcessCB : register(b0)
 {
 	int2 ScrollDelta;
 	uint ClearAll;
-	uint ConeStep;
+	uint padConeStep;
 
 	float2 HeightWindowCenter;
 	float HeightHalfExtent;
-	float SlopePerUnit;
+	float padSlopePerUnit;
 
 	float2 TerrainWindowOrigin;
 	float TerrainTexelSize;
 	uint TerrainDim;
 
 	float GhostDecay;
-	float ObjectSnowDepth;
-	float RimStep;
-	float OverheadIgnore;
+	float padObjectSnowDepth;
+	float padRimStep;
+	float padOverheadIgnore;
 
 	float ShelterBandHeight;
-	float DiffuseLambda;
+	float padDiffuseLambda;
 	float ShelterMaxHeight;
 	float ShelterConeTan;
 
@@ -45,7 +45,6 @@ cbuffer GhostCB : register(b2)
 Texture2D<float> InA : register(t0);
 Texture2D<float> InB : register(t1);
 Texture2D<float4> TerrainWindow : register(t2);
-Texture2D<float> InC : register(t3);
 RWTexture2D<float> OutA : register(u0);
 RWTexture2D<float> OutB : register(u1);
 RWTexture2D<uint> WaterNearOut : register(u1);
@@ -53,9 +52,7 @@ RWTexture2D<float2> OutMask : register(u2);
 RWTexture2D<uint> TileEmptyOut : register(u3);
 Texture2D<uint> TileEmpty : register(t4);
 StructuredBuffer<float4> ExclusionList : register(t5);
-#ifdef SCROLL_RASTER_RG
 Texture2D<float2> RasterIn : register(t6);
-#endif
 
 float2 TexelWorldXY(uint2 p, uint2 dims)
 {
@@ -72,16 +69,8 @@ bool GhostInView(float2 worldXY, float worldZ)
 	return clip.w > 0.0 && all(abs(clip.xy) <= clip.w) && clip.z >= 0.0 && clip.z <= clip.w;
 }
 
-#ifdef SCROLL_TOP_ONLY
-static const bool kScrollBottoms = false;
-#else
-static const bool kScrollBottoms = true;
-#endif
-
 uint ScrollTexel(uint2 texel, uint2 dims);
-#ifndef SCROLL_TOP_ONLY
 groupshared uint scrollElevated;
-#endif
 
 [numthreads(8, 8, 1)] void ScrollCS(uint3 dtid
 									: SV_DispatchThreadID, uint3 gid
@@ -89,7 +78,6 @@ groupshared uint scrollElevated;
 									: SV_GroupIndex) {
 	uint2 dims;
 	OutA.GetDimensions(dims.x, dims.y);
-#ifndef SCROLL_TOP_ONLY
 	if (gi == 0)
 		scrollElevated = 0;
 	GroupMemoryBarrierWithGroupSync();
@@ -98,25 +86,16 @@ groupshared uint scrollElevated;
 	GroupMemoryBarrierWithGroupSync();
 	if (gi == 0)
 		TileEmptyOut[gid.xy] = scrollElevated == 0 ? 1u : 0u;
-#else
-	if (all(dtid.xy < dims))
-		ScrollTexel(dtid.xy, dims);
-#endif
 }
 
 uint ScrollTexel(uint2 texel, uint2 dims)
 {
 	uint3 dtid = uint3(texel, 0);
-#ifdef SCROLL_RASTER_RG
 	float2 raster = RasterIn[dtid.xy];
 	float rasterTop = raster.x;
 	float rasterBottom = -raster.y;
-#else
-	float rasterTop = OutA[dtid.xy];
-	float rasterBottom = kScrollBottoms ? OutB[dtid.xy] : 100000.0;
-#endif
 	bool haveTop = rasterTop > -50000.0;
-	bool haveBottom = kScrollBottoms && rasterBottom < 50000.0;
+	bool haveBottom = rasterBottom < 50000.0;
 
 	float top = -100000.0;
 	float bottom = 100000.0;
@@ -125,8 +104,7 @@ uint ScrollTexel(uint2 texel, uint2 dims)
 		int2 src = int2(dtid.xy) + ScrollDelta;
 		if (all(src >= 0) && all(src < int2(dims))) {
 			top = InA[uint2(src)] - GhostDecay;
-			if (kScrollBottoms)
-				bottom = InB[uint2(src)] + GhostDecay;
+			bottom = InB[uint2(src)] + GhostDecay;
 		}
 	}
 
@@ -142,8 +120,7 @@ uint ScrollTexel(uint2 texel, uint2 dims)
 	}
 
 	OutA[dtid.xy] = top;
-	if (kScrollBottoms)
-		OutB[dtid.xy] = bottom;
+	OutB[dtid.xy] = bottom;
 	bool dead = DeadGhostTiles != 0 && bottom - top > ShelterBandHeight + 61.0;
 	return (top > -50000.0 && bottom < 50000.0 && !dead) ? 1u : 0u;
 }
@@ -272,206 +249,6 @@ groupshared uint combineElevated;
 	}
 
 	OutMask[dtid.xy] = float2(suppress, melt);
-}
-
-float ObjectConeSeedAt(uint2 texel, uint2 dims)
-{
-	float top = InA[texel];
-	if (top < -50000.0)
-		return 0.0;
-
-	float texelDepth = max(InB[texel], 0.0);
-	float seed = max(texelDepth, ObjectSnowDepth);
-
-	bool rim = false;
-	[unroll] for (int i = 0; i < 4; i++)
-	{
-		int2 offs = int2(i == 0 ? 1 : (i == 1 ? -1 : 0), i == 2 ? 1 : (i == 3 ? -1 : 0));
-		int2 p = int2(texel) + offs;
-		if (any(p < 0) || any(p >= int2(dims)))
-			continue;
-		float n1 = InA[uint2(p)];
-		float n2 = -100000.0;
-		int2 p2 = int2(texel) + offs * 2;
-		[flatten] if (all(p2 >= 0) && all(p2 < int2(dims)))
-			n2 = InA[uint2(p2)];
-		float n = n1;
-		if (n < -50000.0) {
-			rim = true;
-			continue;
-		}
-		float drop = top - n;
-		float carry = max(n1 - n2, 0.0);
-		if (drop - carry > RimStep)
-			rim = true;
-		float rise = n1 - top;
-		float riseCarry = max(n2 - n1, 0.0);
-		if (n1 > -50000.0 && rise - riseCarry > RimStep) {
-			if (rise < OverheadIgnore) {
-				rim = true;
-			} else {
-				float under = InC[uint2(p)];
-				if (under < -50000.0 || abs(under - top) > RimStep)
-					rim = true;
-			}
-		}
-	}
-
-	return rim ? 0.0 : seed;
-}
-
-[numthreads(8, 8, 1)] void ObjectConeSeedCS(uint3 dtid
-											: SV_DispatchThreadID) {
-	uint2 dims;
-	OutA.GetDimensions(dims.x, dims.y);
-	if (any(dtid.xy >= dims))
-		return;
-	OutA[dtid.xy] = ObjectConeSeedAt(dtid.xy, dims);
-}
-
-[numthreads(8, 8, 1)] void ObjectConeCS(uint3 dtid
-										: SV_DispatchThreadID) {
-	uint2 dims;
-	OutA.GetDimensions(dims.x, dims.y);
-	if (any(dtid.xy >= dims))
-		return;
-
-	float texel = HeightHalfExtent * 2.0 / dims.x;
-	float h = InA[dtid.xy];
-
-	[unroll] for (int dy = -1; dy <= 1; dy++)
-	{
-		[unroll] for (int dx = -1; dx <= 1; dx++)
-		{
-			if (dx == 0 && dy == 0)
-				continue;
-			int2 p = int2(dtid.xy) + int2(dx, dy) * int(ConeStep);
-			if (any(p < 0) || any(p >= int2(dims)))
-				continue;
-			float dist = length(float2(dx, dy)) * ConeStep * texel;
-			h = min(h, InA[uint2(p)] + SlopePerUnit * dist);
-		}
-	}
-
-	OutA[dtid.xy] = max(h, 0.0);
-}
-
-static const float kOpenPad = 24.0;
-[numthreads(8, 8, 1)] void ObjectSkyOpenCS(uint3 dtid
-										   : SV_DispatchThreadID) {
-	uint2 dims;
-	OutA.GetDimensions(dims.x, dims.y);
-	if (dtid.x >= dims.x || dtid.y >= dims.y)
-		return;
-	uint2 inDims;
-	InA.GetDimensions(inDims.x, inDims.y);
-	int2 inMax = int2(inDims) - 1;
-	int2 p = int2(dtid.xy) * 2;
-	float h = max(max(InA[uint2(min(p, inMax))], InA[uint2(min(p + int2(1, 0), inMax))]),
-		max(InA[uint2(min(p + int2(0, 1), inMax))], InA[uint2(min(p + int2(1, 1), inMax))]));
-	if (h < -50000.0) {
-		OutA[dtid.xy] = 1.0;
-		return;
-	}
-	static const int2 kOpenDirs[8] = {
-		int2(1, 0), int2(1, 1), int2(0, 1), int2(-1, 1),
-		int2(-1, 0), int2(-1, -1), int2(0, -1), int2(1, -1)
-	};
-	static const float kOpenRadii[2] = { 6.0, 14.0 };
-	float occ = 0.0;
-	[unroll] for (uint d = 0; d < 8; d++)
-	{
-		float o = 0.0;
-		[unroll] for (uint r = 0; r < 2; r++)
-		{
-			int2 q = clamp(p + kOpenDirs[d] * (int)kOpenRadii[r], int2(0, 0), inMax);
-			float t = InA[uint2(q)];
-			float distW = kOpenRadii[r] * 4.0 * length(float2(kOpenDirs[d]));
-			[flatten] if (t > -50000.0)
-				o = max(o, smoothstep(0.35, 1.3, ((t - h) - kOpenPad) / distW));
-		}
-		occ += o;
-	}
-	OutA[dtid.xy] = 1.0 - occ * (1.0 / 8.0);
-}
-
-float ConeSettle(float h, float a_px, float a_nx, float a_py, float a_ny)
-{
-	float avg = (a_px + a_nx + a_py + a_ny) * 0.25;
-	return lerp(h, avg, saturate(DiffuseLambda));
-}
-
-[numthreads(8, 8, 1)] void ObjectConeDiffuseCS(uint3 dtid
-											   : SV_DispatchThreadID) {
-	uint2 dims;
-	OutA.GetDimensions(dims.x, dims.y);
-	if (any(dtid.xy >= dims))
-		return;
-	int2 c = int2(dtid.xy);
-	int2 mx = int2(dims) - 1;
-	OutA[dtid.xy] = ConeSettle(InA[dtid.xy],
-		InA[uint2(clamp(c + int2(1, 0), int2(0, 0), mx))],
-		InA[uint2(clamp(c - int2(1, 0), int2(0, 0), mx))],
-		InA[uint2(clamp(c + int2(0, 1), int2(0, 0), mx))],
-		InA[uint2(clamp(c - int2(0, 1), int2(0, 0), mx))]);
-}
-
-#define CONE_TILE 16
-#define CONE_RING 2
-#define CONE_SPAN (CONE_TILE + 2 * CONE_RING)
-groupshared float coneSeedShared[CONE_SPAN * CONE_SPAN];
-groupshared float coneSettleShared[CONE_SPAN * CONE_SPAN];
-
-uint ConeSlot(int2 p, int2 a_origin)
-{
-	int2 l = p - a_origin;
-	return uint(l.y * CONE_SPAN + l.x);
-}
-
-[numthreads(CONE_TILE, CONE_TILE, 1)] void ConeFusedCS(uint3 gid
-													   : SV_GroupID, uint3 gtid
-													   : SV_GroupThreadID, uint gi
-													   : SV_GroupIndex) {
-	uint2 dims;
-	OutA.GetDimensions(dims.x, dims.y);
-	const int2 dimsI = int2(dims);
-	const int2 mx = dimsI - 1;
-	const int2 origin = int2(gid.xy) * CONE_TILE - CONE_RING;
-
-	[loop] for (uint seedI = gi; seedI < CONE_SPAN * CONE_SPAN; seedI += CONE_TILE * CONE_TILE)
-	{
-		const int2 p = origin + int2(seedI % CONE_SPAN, seedI / CONE_SPAN);
-		[branch] if (all(p >= 0) && all(p < dimsI))
-		{
-			coneSeedShared[seedI] = ObjectConeSeedAt(uint2(p), dims);
-		}
-	}
-	GroupMemoryBarrierWithGroupSync();
-
-	const uint inner = CONE_SPAN - 2;
-	[loop] for (uint settleI = gi; settleI < inner * inner; settleI += CONE_TILE * CONE_TILE)
-	{
-		const int2 p = origin + 1 + int2(settleI % inner, settleI / inner);
-		[branch] if (all(p >= 0) && all(p < dimsI))
-		{
-			coneSettleShared[ConeSlot(p, origin)] = ConeSettle(coneSeedShared[ConeSlot(p, origin)],
-				coneSeedShared[ConeSlot(clamp(p + int2(1, 0), int2(0, 0), mx), origin)],
-				coneSeedShared[ConeSlot(clamp(p - int2(1, 0), int2(0, 0), mx), origin)],
-				coneSeedShared[ConeSlot(clamp(p + int2(0, 1), int2(0, 0), mx), origin)],
-				coneSeedShared[ConeSlot(clamp(p - int2(0, 1), int2(0, 0), mx), origin)]);
-		}
-	}
-	GroupMemoryBarrierWithGroupSync();
-
-	const int2 p = int2(gid.xy) * CONE_TILE + int2(gtid.xy);
-	[branch] if (all(p < dimsI))
-	{
-		OutA[uint2(p)] = ConeSettle(coneSettleShared[ConeSlot(p, origin)],
-			coneSettleShared[ConeSlot(clamp(p + int2(1, 0), int2(0, 0), mx), origin)],
-			coneSettleShared[ConeSlot(clamp(p - int2(1, 0), int2(0, 0), mx), origin)],
-			coneSettleShared[ConeSlot(clamp(p + int2(0, 1), int2(0, 0), mx), origin)],
-			coneSettleShared[ConeSlot(clamp(p - int2(0, 1), int2(0, 0), mx), origin)]);
-	}
 }
 
 float WaterWetTexel(int2 w)
