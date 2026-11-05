@@ -669,7 +669,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 				return;
 			}
 		}
-		if (flags.any(Flag::kLODObjects, Flag::kHDLODObjects, Flag::kLODLandscape))
+		if (flags.any(Flag::kLODLandscape))
 			SampleLODDecision(a_pass->geometry, wb.radius, false, cameraInside);
 	}
 	if (!flags.all(Flag::kProjectedUV)) {
