@@ -1529,7 +1529,6 @@ void SnowDeformation::ClearShaderCache()
 	if (snowPrimeState.load(std::memory_order_acquire) == 1)
 		return;
 	deformationCSFailed = false;
-	ReleaseBloodShaders();
 	noiseHashBaked = false;
 	undulationFieldValid = false;
 	for (auto& cs : snowCS)

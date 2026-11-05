@@ -696,9 +696,6 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass, u
 	const auto& flags = a_pass->shaderProperty->flags;
 	const bool engineDecal = !rec.bloodTex && passFacts.engineDecal &&
 	                         !flags.any(Flag::kLODObjects, Flag::kHDLODObjects, Flag::kLODLandscape);
-	if (engineDecal && settings.DecalsOnObjectSnow && settings.ProjSnowMatch &&
-		a_pass->geometry->GetGeometryRuntimeData().skinInstance == nullptr)
-		CaptureDecalOverlay(a_pass);
 	if (engineDecal)
 		return;
 	if (rec.bloodTex) {
@@ -2928,22 +2925,15 @@ SnowDeformation::SmoothedNormalsEntry* SnowDeformation::EnsureSmoothedNormals(RE
 
 void SnowDeformation::DrawCapturedStatics()
 {
-	auto endOverlay = [this] { DrawBloodOverlay(globals::d3d::context, nullptr); };
-	if (SnowShadersPending(2)) {
-		endOverlay();
+	if (SnowShadersPending(2))
 		return;
-	}
 	if (capturedStatics.empty()) {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Setup & Cull");
-		globals::profiler->MarkPassSkipped("SnowDeformation::Decals - Overlay");
 		globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Trench Patch");
-		endOverlay();
 		return;
 	}
-	if (globals::state->isMapMenuOpen || !EnsureStaticsShaders()) {
-		endOverlay();
+	if (globals::state->isMapMenuOpen || !EnsureStaticsShaders())
 		return;
-	}
 
 	auto* fillVS = GetShellFillVS();
 	auto* fillPS = fillVS ? GetShellFillPS() : nullptr;
@@ -3448,10 +3438,8 @@ void SnowDeformation::DrawCapturedStatics()
 			bindSkinStages(skinStagesTess);
 		};
 
-		bloodPreSkinDepthThisFrame = false;
-		globals::profiler->MarkPassSkipped("SnowDeformation::Decals - Overlay");
 		statsRow("SnowDeformation::Objects - Depth Prepass");
-		const bool firstFillFootprint = fillRectVS && !fillPreSnow && !skinSssMarch && bloodOverlays.empty();
+		const bool firstFillFootprint = fillRectVS && !fillPreSnow && !skinSssMarch;
 		fill(shellTestDepthDSV.get(), mainDepthSRV, fillPreSnow, firstFillFootprint);
 		if (fillPreSnow) {
 			globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Depth & Mask Copies");
@@ -3482,7 +3470,6 @@ void SnowDeformation::DrawCapturedStatics()
 		drawSkins(false);
 	}
 	globals::profiler->EndPass();
-	DrawBloodOverlay(context, prepass ? shellTestDepthSRV.get() : nullptr);
 
 	if (skinRecordsLive) {
 		ID3D11Buffer* restore = staticsCB->CB();

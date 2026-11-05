@@ -405,42 +405,6 @@ void SnowDeformation::UpdateTerrainWet()
 	shellTerrainWetValid = true;
 }
 
-bool SnowDeformation::EnsureBloodPreSkinDepth(UINT a_width, UINT a_height)
-{
-	if (bloodPreSkinDepth) {
-		D3D11_TEXTURE2D_DESC have{};
-		bloodPreSkinDepth->GetDesc(&have);
-		if (have.Width == a_width && have.Height == a_height)
-			return bloodPreSkinDepthSRV && bloodPreSkinDepthUAV;
-	}
-	bloodPreSkinDepth = nullptr;
-	bloodPreSkinDepthSRV = nullptr;
-	bloodPreSkinDepthUAV = nullptr;
-	D3D11_TEXTURE2D_DESC desc{};
-	desc.Width = a_width;
-	desc.Height = a_height;
-	desc.MipLevels = 1;
-	desc.ArraySize = 1;
-	desc.Format = DXGI_FORMAT_R32_FLOAT;
-	desc.SampleDesc.Count = 1;
-	desc.Usage = D3D11_USAGE_DEFAULT;
-	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-	auto device = globals::d3d::device;
-	if (FAILED(device->CreateTexture2D(&desc, nullptr, bloodPreSkinDepth.put())))
-		return false;
-	Util::SetResourceName(bloodPreSkinDepth.get(), "SnowDeformation::BloodPreSkinDepth");
-	if (FAILED(device->CreateShaderResourceView(bloodPreSkinDepth.get(), nullptr, bloodPreSkinDepthSRV.put())) ||
-		FAILED(device->CreateUnorderedAccessView(bloodPreSkinDepth.get(), nullptr, bloodPreSkinDepthUAV.put()))) {
-		bloodPreSkinDepth = nullptr;
-		bloodPreSkinDepthSRV = nullptr;
-		bloodPreSkinDepthUAV = nullptr;
-		return false;
-	}
-	Util::SetResourceName(bloodPreSkinDepthSRV.get(), "SnowDeformation::BloodPreSkinDepth SRV");
-	Util::SetResourceName(bloodPreSkinDepthUAV.get(), "SnowDeformation::BloodPreSkinDepth UAV");
-	return true;
-}
-
 bool SnowDeformation::EnsurePrepassResources(ID3D11ShaderResourceView* a_mainDepthSRV)
 {
 	if (!a_mainDepthSRV)
@@ -1540,18 +1504,10 @@ void SnowDeformation::DrawShell()
 			masksRT.texture->GetDesc(&masksDesc);
 			const D3D11_BOX masksBox = ScreenRectBox(prevViewportCount ? &prevViewports[0] : nullptr, masksDesc.Width, masksDesc.Height, 1);
 			CopySRVResource(masksRT.SRV, "SnowDeformation::LandMasksCopy", landMasksCopyTex, landMasksCopySRV, &masksBox);
-			if (landMasksCopyTex && bloodPreDecalValid && bloodPreDecalMasksTex && DecalOverlayWanted()) {
-				const RECT& rc = bloodCopyRect;
-				const D3D11_BOX box{ UINT(rc.left), UINT(rc.top), 0, UINT(rc.right), UINT(rc.bottom), 1 };
-				context->CopySubresourceRegion(landMasksCopyTex.get(), 0, box.left, box.top, 0, bloodPreDecalMasksTex.get(), 0, &box);
-			}
 			globals::profiler->EndPass();
 		} else {
 			globals::profiler->MarkPassSkipped("SnowDeformation::Ground - Depth & Mask Copies");
 		}
-		bloodPreSnowValid = false;
-		if (!bloodOverlays.empty() && DecalOverlayWanted() && bloodPreDecalValid && !capturedStatics.empty())
-			CopyBloodTargets(false);
 	}
 
 	const auto& mainDepth = renderer->GetDepthStencilData().depthStencils[RE::RENDER_TARGETS_DEPTHSTENCIL::kMAIN];
