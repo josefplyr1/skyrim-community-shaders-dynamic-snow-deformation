@@ -286,11 +286,12 @@ float2 TrenchDetailRotate(float2 v, float2 cs)
 TrenchDetailTaps TrenchDetailTapsAt(float2 worldXY)
 {
 	const float2 uv = worldXY / kTrenchDetailTile;
-	const StochasticOffsets o = ComputeStochasticOffsetsScaledPeriodic(uv, MESH_SCALE, kTrenchDetailLatticePeriod);
+	float2 cell1, cell2;
+	const StochasticOffsets o = ComputeStochasticOffsetsScaledPeriodic(uv, MESH_SCALE, kTrenchDetailLatticePeriod, cell1, cell2);
 	TrenchDetailTaps t;
 	t.turn = float4(TrenchDetailTurn(o.offset1), TrenchDetailTurn(o.offset2));
-	t.uv = float4(TrenchDetailRotate(uv - StochasticCellUV(o.cell1, MESH_SCALE), t.turn.xy) + o.offset1,
-		TrenchDetailRotate(uv - StochasticCellUV(o.cell2, MESH_SCALE), t.turn.zw) + o.offset2);
+	t.uv = float4(TrenchDetailRotate(uv - StochasticCellUV(cell1, MESH_SCALE), t.turn.xy) + o.offset1,
+		TrenchDetailRotate(uv - StochasticCellUV(cell2, MESH_SCALE), t.turn.zw) + o.offset2);
 	t.w = o.tap1Weight;
 	return t;
 }

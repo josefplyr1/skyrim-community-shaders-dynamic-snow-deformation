@@ -22,35 +22,11 @@ namespace Triplanar
 		       tex.Sample(samp, worldPos.xy * scale) * weights.z;
 	}
 
-	/// Weighted triplanar sample with caller-supplied gradients — for sampling
-	/// inside flow control, where implicit derivatives are illegal. Pair with
-	/// ComputeGradients called outside the branch.
-	float4 SampleGrad(Texture2D<float4> tex, SamplerState samp, float3 worldPos, float3 weights, float scale, float3 dPdx, float3 dPdy)
-	{
-		return tex.SampleGrad(samp, worldPos.yz * scale, dPdx.yz, dPdy.yz) * weights.x +
-		       tex.SampleGrad(samp, worldPos.xz * scale, dPdx.xz, dPdy.xz) * weights.y +
-		       tex.SampleGrad(samp, worldPos.xy * scale, dPdx.xy, dPdy.xy) * weights.z;
-	}
-
 	/// Compute gradients for stochastic triplanar sampling, pre-computed before branching.
 	void ComputeGradients(float3 worldPos, float scale, out float3 dPdx, out float3 dPdy)
 	{
 		dPdx = ddx(worldPos * scale);
 		dPdy = ddy(worldPos * scale);
-	}
-
-	/// Stochastic triplanar with caller-supplied gradients (scaled, as ComputeGradients
-	/// returns them): the position may move off the surface the gradients describe.
-	float4 SampleStochasticGrad(Texture2D<float4> tex, SamplerState samp, float3 worldPos, float3 weights, float scale, float noise, float3 dPdx, float3 dPdy)
-	{
-		float4 result = 0;
-		if (noise < weights.x)
-			result = tex.SampleGrad(samp, worldPos.yz * scale, dPdx.yz, dPdy.yz);
-		else if (noise < weights.x + weights.y)
-			result = tex.SampleGrad(samp, worldPos.xz * scale, dPdx.xz, dPdy.xz);
-		else
-			result = tex.SampleGrad(samp, worldPos.xy * scale, dPdx.xy, dPdy.xy);
-		return result;
 	}
 
 	/// Stochastic triplanar: select one projection plane via noise, reducing 3 texture reads to 1.
@@ -59,7 +35,15 @@ namespace Triplanar
 		float3 dPdx = 0.0;
 		float3 dPdy = 0.0;
 		ComputeGradients(worldPos, scale, dPdx, dPdy);
-		return SampleStochasticGrad(tex, samp, worldPos, weights, scale, noise, dPdx, dPdy);
+
+		float4 result = 0;
+		if (noise < weights.x)
+			result = tex.SampleGrad(samp, worldPos.yz * scale, dPdx.yz, dPdy.yz);
+		else if (noise < weights.x + weights.y)
+			result = tex.SampleGrad(samp, worldPos.xz * scale, dPdx.xz, dPdy.xz);
+		else
+			result = tex.SampleGrad(samp, worldPos.xy * scale, dPdx.xy, dPdy.xy);
+		return result;
 	}
 
 	/// Stochastic triplanar with mip bias via gradient scaling.

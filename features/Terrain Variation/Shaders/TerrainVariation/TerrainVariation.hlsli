@@ -6,12 +6,12 @@
 #define TERRAIN_VARIATION_HLSLI
 
 #include "Common/ColorManagement.hlsli"
+#include "Common/Math.hlsli"
 #include "Common/SharedData.hlsli"
 
 // --------------------- CONSTANTS AND STRUCTURES --------------------- //
 static const float HEIGHT_INFLUENCE = 0.3;  // How much height affects blending (0=pure stochastic, 1=pure height)
 static const float2x2 SKEW_MATRIX = float2x2(1.0, 0.0, -0.57735027, 1.15470054);
-static const float2x2 SKEW_MATRIX_INVERSE = float2x2(1.0, 0.0, 0.5, 0.8660254);
 static const float WORLD_SCALE = 332.54;
 // Mesh UVs already tile, so one lattice cell maps to one UV tile.
 static const float MESH_SCALE = 1.0;
@@ -30,9 +30,6 @@ struct StochasticOffsets
 	float2 offset2;
 	// Normalized weight of tap 1; tap 2 gets the remainder.
 	float tap1Weight;
-	// The taps' lattice cells, unwrapped (StochasticCellUV places them).
-	float2 cell1;
-	float2 cell2;
 };
 
 struct StochasticCorner
@@ -57,20 +54,6 @@ inline float2 hashLOD(float2 p)
 	return frac(float2(dot(p, float2(1.0, 17.0)), dot(p, float2(1.0, 23.0))));
 }
 
-// Value of the top-left pixel of the 2x2 quad, read through fine derivatives (SM5 has no QuadReadLaneAt).
-// Exact for integer-valued input, so every pixel of the quad gets the same bits.
-inline float4 QuadReadTopLeft(float4 v, float2 quadPixel)
-{
-	v -= quadPixel.x * ddx_fine(v);
-	return v - quadPixel.y * ddy_fine(v);
-}
-
-inline float2 QuadReadTopLeft(float2 v, float2 quadPixel)
-{
-	v -= quadPixel.x * ddx_fine(v);
-	return v - quadPixel.y * ddy_fine(v);
-}
-
 // Barycentric weight of a lattice corner (hat function of the skewed triangular grid).
 // Equals the barycentric inside the corner's six triangles and 0 elsewhere.
 inline float StochasticCornerWeight(float2 skewUV, float2 cell)
@@ -78,6 +61,44 @@ inline float StochasticCornerWeight(float2 skewUV, float2 cell)
 	float2 d = skewUV - cell;
 	return saturate(1.0 - max(max(abs(d.x), abs(d.y)), abs(d.x + d.y)));
 }
+
+// Declares skewUV and the three lattice corners around uv, strongest first, as c0..c2.
+#define STOCHASTIC_CORNERS(uv, scale)                 \
+	float2 skewUV = mul(SKEW_MATRIX, (uv) * (scale)); \
+	float2 vxID = floor(skewUV);                      \
+	float2 f = frac(skewUV);                          \
+	float bz = 1.0 - f.x - f.y;                       \
+	StochasticCorner c0, c1, c2;                      \
+	if (bz > 0) {                                     \
+		c0.cell = vxID;                               \
+		c0.w = bz;                                    \
+		c1.cell = vxID + float2(0, 1);                \
+		c1.w = f.y;                                   \
+		c2.cell = vxID + float2(1, 0);                \
+		c2.w = f.x;                                   \
+	} else {                                          \
+		c0.cell = vxID + 1.0;                         \
+		c0.w = -bz;                                   \
+		c1.cell = vxID + float2(1, 0);                \
+		c1.w = 1.0 - f.y;                             \
+		c2.cell = vxID + float2(0, 1);                \
+		c2.w = 1.0 - f.x;                             \
+	}                                                 \
+	if (c1.w > c0.w) {                                \
+		StochasticCorner t = c0;                      \
+		c0 = c1;                                      \
+		c1 = t;                                       \
+	}                                                 \
+	if (c2.w > c0.w) {                                \
+		StochasticCorner t = c0;                      \
+		c0 = c2;                                      \
+		c2 = t;                                       \
+	}                                                 \
+	if (c2.w > c1.w) {                                \
+		StochasticCorner t = c1;                      \
+		c1 = c2;                                      \
+		c2 = t;                                       \
+	}
 
 // Two highest barycentric corners of the triangular grid.
 // Near c1/c2 ties, fade w2 so the discarded corner cannot pop;
@@ -88,47 +109,11 @@ inline float StochasticCornerWeight(float2 skewUV, float2 cell)
 // Weights stay per pixel, evaluated against the quad's corners.
 inline StochasticOffsets ComputeStochasticOffsetsScaled(float2 uv, float scale, float2 pixelPos)
 {
-	float2 skewUV = mul(SKEW_MATRIX, uv * scale);
-	float2 vxID = floor(skewUV);
-	float2 f = frac(skewUV);
-	float bz = 1.0 - f.x - f.y;
+	STOCHASTIC_CORNERS(uv, scale)
 
-	StochasticCorner c0, c1, c2;
-	if (bz > 0) {
-		c0.cell = vxID;
-		c0.w = bz;
-		c1.cell = vxID + float2(0, 1);
-		c1.w = f.y;
-		c2.cell = vxID + float2(1, 0);
-		c2.w = f.x;
-	} else {
-		c0.cell = vxID + 1.0;
-		c0.w = -bz;
-		c1.cell = vxID + float2(1, 0);
-		c1.w = 1.0 - f.y;
-		c2.cell = vxID + float2(0, 1);
-		c2.w = 1.0 - f.x;
-	}
-
-	if (c1.w > c0.w) {
-		StochasticCorner t = c0;
-		c0 = c1;
-		c1 = t;
-	}
-	if (c2.w > c0.w) {
-		StochasticCorner t = c0;
-		c0 = c2;
-		c2 = t;
-	}
-	if (c2.w > c1.w) {
-		StochasticCorner t = c1;
-		c1 = c2;
-		c2 = t;
-	}
-
-	float2 quadPixel = float2(uint2(pixelPos) & 1u);
-	float4 tapCells = QuadReadTopLeft(float4(c0.cell, c1.cell), quadPixel);
-	float2 droppedCell = QuadReadTopLeft(c2.cell, quadPixel);
+	float2 quadPixel = Math::QuadPixel(pixelPos);
+	float4 tapCells = Math::QuadReadTopLeft(float4(c0.cell, c1.cell), quadPixel);
+	float2 droppedCell = Math::QuadReadTopLeft(c2.cell, quadPixel);
 
 	// Equal to c0.w, c1.w, c2.w on the top-left pixel.
 	float b1 = StochasticCornerWeight(skewUV, tapCells.xy);
@@ -148,53 +133,21 @@ inline StochasticOffsets ComputeStochasticOffsetsScaled(float2 uv, float scale, 
 	o.offset1 = hash2D2D(tapCells.xy);
 	o.offset2 = hash2D2D(tapCells.zw);
 	o.tap1Weight = w1 * rcp(max(w1 + w2, 1e-8));
-	o.cell1 = tapCells.xy;
-	o.cell2 = tapCells.zw;
 	return o;
 }
 
-// Per-pixel corners, no quad read. period > 0 hashes the cells modulo period,
-// for UVs too large for the hash's precision: wrapping the UV instead breaks
-// the skewed grid along the wrap.
-inline StochasticOffsets ComputeStochasticOffsetsScaledPeriodic(float2 uv, float scale, float period)
+// period < 1 leaves the cell as is. The max() is for fxc: a literal 0 period would otherwise warn X4008.
+inline float2 WrapCell(float2 cell, float period)
 {
-	float2 skewUV = mul(SKEW_MATRIX, uv * scale);
-	float2 vxID = floor(skewUV);
-	float2 f = frac(skewUV);
-	float bz = 1.0 - f.x - f.y;
+	return period >= 1.0 ? cell - period * floor(cell / max(period, 1.0)) : cell;
+}
 
-	StochasticCorner c0, c1, c2;
-	if (bz > 0) {
-		c0.cell = vxID;
-		c0.w = bz;
-		c1.cell = vxID + float2(0, 1);
-		c1.w = f.y;
-		c2.cell = vxID + float2(1, 0);
-		c2.w = f.x;
-	} else {
-		c0.cell = vxID + 1.0;
-		c0.w = -bz;
-		c1.cell = vxID + float2(1, 0);
-		c1.w = 1.0 - f.y;
-		c2.cell = vxID + float2(0, 1);
-		c2.w = 1.0 - f.x;
-	}
-
-	if (c1.w > c0.w) {
-		StochasticCorner t = c0;
-		c0 = c1;
-		c1 = t;
-	}
-	if (c2.w > c0.w) {
-		StochasticCorner t = c0;
-		c0 = c2;
-		c2 = t;
-	}
-	if (c2.w > c1.w) {
-		StochasticCorner t = c1;
-		c1 = c2;
-		c2 = t;
-	}
+// Per-pixel corners, no quad read: sample with an explicit mip level or gradients, because plain Sample would
+// take the corner jumps into its derivatives. period >= 1 hashes the cells modulo period, for UVs past
+// the hash's precision; the cells come back unwrapped for StochasticCellUV.
+inline StochasticOffsets ComputeStochasticOffsetsScaledPeriodic(float2 uv, float scale, float period, out float2 cell1, out float2 cell2)
+{
+	STOCHASTIC_CORNERS(uv, scale)
 
 	float w1 = saturate(c0.w);
 	w1 *= w1;
@@ -205,18 +158,21 @@ inline StochasticOffsets ComputeStochasticOffsetsScaledPeriodic(float2 uv, float
 	w2 *= lerp(1.0, rankFade, dominanceGuard);
 
 	StochasticOffsets o;
-	o.offset1 = hash2D2D(period > 0.0 ? c0.cell - period * floor(c0.cell / max(period, 1.0)) : c0.cell);
-	o.offset2 = hash2D2D(period > 0.0 ? c1.cell - period * floor(c1.cell / max(period, 1.0)) : c1.cell);
+	o.offset1 = hash2D2D(WrapCell(c0.cell, period));
+	o.offset2 = hash2D2D(WrapCell(c1.cell, period));
 	o.tap1Weight = w1 * rcp(max(w1 + w2, 1e-8));
-	o.cell1 = c0.cell;
-	o.cell2 = c1.cell;
+	cell1 = c0.cell;
+	cell2 = c1.cell;
 	return o;
 }
 
-// A lattice cell's corner in UV, undoing the skew.
+#undef STOCHASTIC_CORNERS
+
+/** @brief UV of a lattice cell from ComputeStochasticOffsetsScaledPeriodic, at the same scale. */
 inline float2 StochasticCellUV(float2 cell, float scale)
 {
-	return mul(SKEW_MATRIX_INVERSE, cell) / scale;
+	// Inverse of SKEW_MATRIX. A named static const here, global or local, moves fxc's output in TRUE_PBR permutations.
+	return mul(float2x2(1.0, 0.0, 0.5, 0.8660254), cell) / scale;
 }
 
 // pixelPos is SV_Position.xy; it selects the pixel's slot in its 2x2 quad.

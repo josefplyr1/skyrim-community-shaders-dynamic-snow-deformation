@@ -6,6 +6,7 @@
 #include "ShaderCache.h"
 #include "State.h"
 #include "Utils/Format.h"
+#include "Utils/Logging.h"
 #include <DDSTextureLoader.h>
 #include <DirectXTex.h>
 #include <bcrypt.h>
@@ -145,67 +146,6 @@ namespace Util
 			}
 			return bytes;
 		}
-
-		std::string FormatName(DXGI_FORMAT a_format)
-		{
-			constexpr std::string_view kPrefix = "DXGI_FORMAT_";
-			std::string_view name = magic_enum::enum_name(a_format);
-			if (name.starts_with(kPrefix))
-				name.remove_prefix(kPrefix.size());
-			return name.empty() ? std::to_string(int(a_format)) : std::string(name);
-		}
-
-		std::string TextureShape(std::string a_extent, DXGI_FORMAT a_format, uint32_t a_layers, uint32_t a_mips, uint32_t a_samples, D3D11_USAGE a_usage)
-		{
-			std::string shape = std::move(a_extent) + " " + FormatName(a_format);
-			if (a_layers > 1)
-				shape += std::format(" [{}]", a_layers);
-			if (a_mips > 1)
-				shape += std::format(" {} mips", a_mips);
-			if (a_samples > 1)
-				shape += std::format(" {}x MSAA", a_samples);
-			if (a_usage == D3D11_USAGE_DYNAMIC)
-				shape += " dynamic";
-			return shape;
-		}
-
-		uint64_t MeasureResource(ID3D11Resource* a_resource, D3D11_USAGE& a_usage, std::string* a_shape = nullptr)
-		{
-			a_usage = D3D11_USAGE_DEFAULT;
-			if (winrt::com_ptr<ID3D11Buffer> buffer; SUCCEEDED(a_resource->QueryInterface(__uuidof(ID3D11Buffer), buffer.put_void()))) {
-				D3D11_BUFFER_DESC desc;
-				buffer->GetDesc(&desc);
-				a_usage = desc.Usage;
-				if (a_shape)
-					*a_shape = desc.Usage == D3D11_USAGE_DYNAMIC ? "buffer dynamic" : "buffer";
-				return desc.ByteWidth;
-			}
-			if (winrt::com_ptr<ID3D11Texture2D> texture; SUCCEEDED(a_resource->QueryInterface(__uuidof(ID3D11Texture2D), texture.put_void()))) {
-				D3D11_TEXTURE2D_DESC desc;
-				texture->GetDesc(&desc);
-				a_usage = desc.Usage;
-				if (a_shape)
-					*a_shape = TextureShape(std::format("{}x{}", desc.Width, desc.Height), desc.Format, desc.ArraySize, desc.MipLevels, desc.SampleDesc.Count, desc.Usage);
-				return MipChainBytes(desc.Format, desc.Width, desc.Height, 1, desc.MipLevels) * std::max(desc.ArraySize, 1u) * std::max(desc.SampleDesc.Count, 1u);
-			}
-			if (winrt::com_ptr<ID3D11Texture3D> texture; SUCCEEDED(a_resource->QueryInterface(__uuidof(ID3D11Texture3D), texture.put_void()))) {
-				D3D11_TEXTURE3D_DESC desc;
-				texture->GetDesc(&desc);
-				a_usage = desc.Usage;
-				if (a_shape)
-					*a_shape = TextureShape(std::format("{}x{}x{}", desc.Width, desc.Height, desc.Depth), desc.Format, 1, desc.MipLevels, 1, desc.Usage);
-				return MipChainBytes(desc.Format, desc.Width, desc.Height, desc.Depth, desc.MipLevels);
-			}
-			if (winrt::com_ptr<ID3D11Texture1D> texture; SUCCEEDED(a_resource->QueryInterface(__uuidof(ID3D11Texture1D), texture.put_void()))) {
-				D3D11_TEXTURE1D_DESC desc;
-				texture->GetDesc(&desc);
-				a_usage = desc.Usage;
-				if (a_shape)
-					*a_shape = TextureShape(std::to_string(desc.Width), desc.Format, desc.ArraySize, desc.MipLevels, 1, desc.Usage);
-				return MipChainBytes(desc.Format, desc.Width, 1, 1, desc.MipLevels) * std::max(desc.ArraySize, 1u);
-			}
-			return 0;
-		}
 	}
 
 	void SetResourceName(ID3D11DeviceChild* Resource, const char* Format, ...)
@@ -229,8 +169,36 @@ namespace Util
 	{
 		if (!a_resource)
 			return 0;
-		D3D11_USAGE usage;
-		return MeasureResource(a_resource, usage);
+		D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+		a_resource->GetType(&dimension);
+		switch (dimension) {
+		case D3D11_RESOURCE_DIMENSION_BUFFER:
+			{
+				D3D11_BUFFER_DESC desc;
+				static_cast<ID3D11Buffer*>(a_resource)->GetDesc(&desc);
+				return desc.ByteWidth;
+			}
+		case D3D11_RESOURCE_DIMENSION_TEXTURE1D:
+			{
+				D3D11_TEXTURE1D_DESC desc;
+				static_cast<ID3D11Texture1D*>(a_resource)->GetDesc(&desc);
+				return MipChainBytes(desc.Format, desc.Width, 1, 1, desc.MipLevels) * std::max(desc.ArraySize, 1u);
+			}
+		case D3D11_RESOURCE_DIMENSION_TEXTURE2D:
+			{
+				D3D11_TEXTURE2D_DESC desc;
+				static_cast<ID3D11Texture2D*>(a_resource)->GetDesc(&desc);
+				return MipChainBytes(desc.Format, desc.Width, desc.Height, 1, desc.MipLevels) * std::max(desc.ArraySize, 1u) * std::max(desc.SampleDesc.Count, 1u);
+			}
+		case D3D11_RESOURCE_DIMENSION_TEXTURE3D:
+			{
+				D3D11_TEXTURE3D_DESC desc;
+				static_cast<ID3D11Texture3D*>(a_resource)->GetDesc(&desc);
+				return MipChainBytes(desc.Format, desc.Width, desc.Height, desc.Depth, desc.MipLevels);
+			}
+		default:
+			return 0;
+		}
 	}
 
 	// Per-frame getters would otherwise retry a failed compile every frame.
@@ -313,7 +281,7 @@ namespace Util
 		/** @brief True for the targets CreateShaderObject can turn into a shader: only those are read from or written to the cache. */
 		bool IsCacheableTarget(const char* programType)
 		{
-			for (const auto* target : { "ps_5_0", "vs_5_0", "hs_5_0", "ds_5_0", "gs_5_0", "cs_5_0", "cs_4_0" })
+			for (const auto* target : { "ps_5_0", "vs_5_0", "hs_5_0", "ds_5_0", "cs_5_0", "cs_4_0" })
 				if (!_stricmp(programType, target))
 					return true;
 			return false;
@@ -345,10 +313,6 @@ namespace Util
 				ID3D11DomainShader* regShader = nullptr;
 				result = device->CreateDomainShader(code, size, nullptr, &regShader);
 				*shader = regShader;
-			} else if (!_stricmp(programType, "gs_5_0")) {
-				ID3D11GeometryShader* regShader = nullptr;
-				result = device->CreateGeometryShader(code, size, nullptr, &regShader);
-				*shader = regShader;
 			} else if (!_stricmp(programType, "cs_5_0") || !_stricmp(programType, "cs_4_0")) {
 				ID3D11ComputeShader* regShader = nullptr;
 				result = device->CreateComputeShader(code, size, nullptr, &regShader);
@@ -360,6 +324,8 @@ namespace Util
 
 	ID3D11DeviceChild* CompileShader(const wchar_t* FilePath, const std::vector<std::pair<const char*, const char*>>& Defines, const char* ProgramType, const char* Program, ID3DBlob** OutBlob)
 	{
+		if (OutBlob)
+			*OutBlob = nullptr;
 		auto device = globals::d3d::device;
 
 		CustomInclude include;
@@ -376,7 +342,8 @@ namespace Util
 			}
 		}
 
-		if (globals::state->IsDeveloperMode()) {
+		const bool debugCompile = SIE::ShaderCache::IsDebugCompile();
+		if (debugCompile) {
 			macros.push_back({ "D3DCOMPILE_SKIP_OPTIMIZATION", "" });
 			macros.push_back({ "D3DCOMPILE_DEBUG", "" });
 		}
@@ -402,8 +369,6 @@ namespace Util
 			macros.push_back({ "HULLSHADER", "" });
 		else if (!_stricmp(ProgramType, "ds_5_0"))
 			macros.push_back({ "DOMAINSHADER", "" });
-		else if (!_stricmp(ProgramType, "gs_5_0"))
-			macros.push_back({ "GSHADER", "" });
 		else if (!_stricmp(ProgramType, "cs_5_0"))
 			macros.push_back({ "COMPUTESHADER", "" });
 		else if (!_stricmp(ProgramType, "cs_4_0"))
@@ -419,7 +384,7 @@ namespace Util
 		macros.push_back({ nullptr, nullptr });
 
 		// Compiler setup
-		uint32_t flags = !globals::state->IsDeveloperMode() ? (D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3) : D3DCOMPILE_DEBUG;
+		uint32_t flags = !debugCompile ? (D3DCOMPILE_ENABLE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3) : D3DCOMPILE_DEBUG;
 		if (globals::state->enablePartialPrecision.load(std::memory_order_relaxed))
 			flags |= D3DCOMPILE_PARTIAL_PRECISION;
 		if (globals::state->enableAvoidFlowControl.load(std::memory_order_relaxed))
@@ -456,6 +421,7 @@ namespace Util
 		if (const auto cachedBlob = diskPath ? SIE::SShaderCache::ReadIntactBlob(*diskPath) : nullptr) {
 			ID3D11DeviceChild* shader = nullptr;
 			if (SUCCEEDED(CreateShaderObject(device, ProgramType, cachedBlob.get(), &shader))) {
+				Util::SetResourceName(shader, "%s:%s", str.c_str(), Program);
 				logger::debug("Loaded {} from {}", str, Util::WStringToString(*diskPath));
 				if (OutBlob)
 					cachedBlob.copy_to(OutBlob);
@@ -480,9 +446,31 @@ namespace Util
 
 		ID3D11DeviceChild* shader = nullptr;
 		DX::ThrowIfFailed(CreateShaderObject(device, ProgramType, shaderBlob.get(), &shader));
-		if (OutBlob)
+		Util::SetResourceName(shader, "%s:%s", str.c_str(), Program);
+		if (OutBlob && shader)
 			shaderBlob.copy_to(OutBlob);
 		return shader;
+	}
+
+	bool SupportsMaterialAlpha(DXGI_FORMAT format)
+	{
+		static constexpr std::array formats{
+			DXGI_FORMAT_BC2_UNORM,
+			DXGI_FORMAT_BC3_UNORM,
+			DXGI_FORMAT_BC7_UNORM,
+			DXGI_FORMAT_R8G8B8A8_UNORM,
+			DXGI_FORMAT_R8G8B8A8_SNORM,
+			DXGI_FORMAT_B8G8R8A8_UNORM,
+			DXGI_FORMAT_B4G4R4A4_UNORM,
+			DXGI_FORMAT_A8_UNORM,
+			DXGI_FORMAT_R10G10B10A2_UNORM,
+			DXGI_FORMAT_R16G16B16A16_UNORM,
+			DXGI_FORMAT_R16G16B16A16_SNORM,
+			DXGI_FORMAT_R16G16B16A16_FLOAT,
+			DXGI_FORMAT_R32G32B32A32_FLOAT
+		};
+
+		return std::ranges::contains(formats, DirectX::MakeLinear(format));
 	}
 
 	// RAII wrapper for D3D mapped resources
@@ -550,11 +538,10 @@ namespace Util
 		const UINT pixelCount = desc.Width * desc.Height;
 		const UINT largeTextureThreshold = 1024 * 1024;  // 1 megapixel
 		if (pixelCount > largeTextureThreshold) {
-			static std::once_flag largeTextureWarning;
-			std::call_once(largeTextureWarning, [&]() {
+			static Util::OnceFlag largeTextureWarning;
+			if (largeTextureWarning.First())
 				logger::warn("ApplyHighlightTintToTexture: Processing large texture ({}x{} = {} pixels). Consider using compute shader for better performance. This warning will only be shown once.",
 					desc.Width, desc.Height, pixelCount);
-			});
 		}  // Create a temporary staging texture to read from
 		ID3D11Texture2D* stagingTexture = nullptr;
 		desc.Usage = D3D11_USAGE_STAGING;

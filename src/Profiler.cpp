@@ -1,6 +1,7 @@
 #include "Profiler.h"
 
 #include <algorithm>
+#include <span>
 #include <unordered_map>
 
 float Profiler::RollingHistory::GetAverage() const
@@ -37,10 +38,6 @@ void Profiler::Initialize(ID3D11Device* device, ID3D11DeviceContext* a_context)
 
 	context = a_context;
 
-	LARGE_INTEGER freq;
-	QueryPerformanceFrequency(&freq);
-	cpuTicksToMs = 1000.0 / static_cast<double>(freq.QuadPart);
-
 	for (auto& frame : frames) {
 		D3D11_QUERY_DESC disjointDesc{};
 		disjointDesc.Query = D3D11_QUERY_TIMESTAMP_DISJOINT;
@@ -76,10 +73,10 @@ void Profiler::Release()
 	for (auto& frame : frames) {
 		frame.disjoint = nullptr;
 		frame.timers.clear();
-		frame.skipped.clear();
 		frame.activeCount = 0;
+		frame.skipped = {};
 	}
-	pendingSkipped.clear();
+	pendingSkipped = {};
 	results.clear();
 	knownTimers.clear();
 	knownTimerIndex.clear();
@@ -93,7 +90,7 @@ void Profiler::Release()
 
 void Profiler::BeginFrame()
 {
-	if (!initialized || !context || frameActive || frameSkipped)
+	if (!initialized || !context || frameActive || frameSkipped || !IsActive())
 		return;
 
 	CollectResults();
@@ -106,30 +103,34 @@ void Profiler::BeginFrame()
 
 	auto& frame = frames[writeFrame];
 	frame.activeCount = 0;
-	frame.skipped.clear();
-	frame.skipped.swap(pendingSkipped);
+	frame.overflowed = false;
+	frame.skipped.count = 0;
+	std::swap(frame.skipped, pendingSkipped);
 	frameActive = true;
+	passOpen = false;
 	context->Begin(frame.disjoint.get());
 }
 
-void Profiler::BeginPass(const std::string& name)
+void Profiler::BeginPass(std::string_view name)
 {
 	if (!initialized || !context)
 		return;
 
 	if (!frameActive)
 		BeginFrame();
-	if (!frameActive)
-		return;
 
-	auto& frame = frames[writeFrame];
-	if (frame.activeCount >= kMaxTimers)
-		return;
-
-	auto& timer = frame.timers[frame.activeCount];
-	timer.name = name;
-	context->End(timer.begin.get());
-	QueryPerformanceCounter(&timer.cpuBegin);
+	if (frameActive) {
+		auto& frame = frames[writeFrame];
+		if (frame.activeCount < kMaxTimers) {
+			auto& timer = frame.timers[frame.activeCount];
+			timer.name.assign(name);
+			context->End(timer.begin.get());
+			QueryPerformanceCounter(&timer.cpuBegin);
+			passOpen = true;
+		} else {
+			frame.overflowed = true;
+		}
+	}
 
 	if (beginPerfEvent)
 		beginPerfEvent(name);
@@ -137,50 +138,61 @@ void Profiler::BeginPass(const std::string& name)
 
 void Profiler::EndPass()
 {
-	if (!initialized || !context || !frameActive)
+	if (!initialized || !context)
 		return;
 
-	auto& frame = frames[writeFrame];
-	if (frame.activeCount >= kMaxTimers)
-		return;
+	if (frameActive) {
+		auto& frame = frames[writeFrame];
+		if (frame.activeCount < kMaxTimers && std::exchange(passOpen, false)) {
+			auto& timer = frame.timers[frame.activeCount];
 
-	auto& timer = frame.timers[frame.activeCount];
+			LARGE_INTEGER cpuEnd;
+			QueryPerformanceCounter(&cpuEnd);
+			timer.cpuMs = static_cast<float>(static_cast<double>(cpuEnd.QuadPart - timer.cpuBegin.QuadPart) * cpuTicksToMs);
 
-	LARGE_INTEGER cpuEnd;
-	QueryPerformanceCounter(&cpuEnd);
-	timer.cpuMs = static_cast<float>(static_cast<double>(cpuEnd.QuadPart - timer.cpuBegin.QuadPart) * cpuTicksToMs);
-
-	context->End(timer.end.get());
-	frame.activeCount++;
+			context->End(timer.end.get());
+			frame.activeCount++;
+		}
+	}
 
 	if (endPerfEvent)
 		endPerfEvent({});
 }
 
-void Profiler::MarkPassSkipped(const std::string& name)
+void Profiler::MarkPassSkipped(std::string_view name)
 {
-	if (!initialized)
+	if (!initialized || !IsActive())
 		return;
-
-	// Resolved when the frame is collected, against the passes that ran in it.
-	(frameActive ? frames[writeFrame].skipped : pendingSkipped).push_back(name);
+	(frameActive ? frames[writeFrame].skipped : pendingSkipped).Add(name);
 }
 
-Profiler::KnownTimer& Profiler::FindOrAddTimer(const std::string& name)
+void Profiler::SkipMarks::Add(std::string_view name)
 {
-	auto [it, inserted] = knownTimerIndex.try_emplace(name, knownTimers.size());
-	if (inserted) {
-		KnownTimer kt;
-		kt.name = name;
-		knownTimers.push_back(std::move(kt));
-	}
-	return knownTimers[it->second];
+	const auto live = std::span(names).first(count);
+	if (std::ranges::find(live, name) != live.end())
+		return;
+	if (count < names.size())
+		names[count].assign(name);
+	else
+		names.emplace_back(name);
+	count++;
 }
 
 void Profiler::EndFrame()
 {
+	// Before the early returns so it ticks while GPU queries are off.
+	LARGE_INTEGER now;
+	QueryPerformanceCounter(&now);
+	if (lastFrameTicks != 0)
+		frameHistory.PushSample(static_cast<float>(static_cast<double>(now.QuadPart - lastFrameTicks) * cpuTicksToMs));
+	lastFrameTicks = now.QuadPart;
+
 	if (!initialized || !context)
 		return;
+
+	// Marks no frame took belong to a frame that recorded nothing.
+	pendingSkipped.count = 0;
+	frameCounter.fetch_add(1, std::memory_order_relaxed);
 
 	if (frameSkipped) {
 		frameSkipped = false;
@@ -190,6 +202,7 @@ void Profiler::EndFrame()
 		return;
 
 	frameActive = false;
+	passOpen = false;
 	context->End(frames[writeFrame].disjoint.get());
 	writeFrame = (writeFrame + 1) % kFrameLatency;
 	pendingFrames++;
@@ -203,7 +216,6 @@ void Profiler::CollectResults()
 		float cpuMs = 0.0f;
 	};
 	std::unordered_map<std::string, ActiveTimerData> activeTimers;
-	std::vector<const std::string*> activeOrder;
 	float activeTotalMs = 0.0f;
 	float activeCpuTotalMs = 0.0f;
 	bool collected = false;
@@ -223,9 +235,22 @@ void Profiler::CollectResults()
 		collectedFrames++;
 
 		activeTimers.clear();
-		activeOrder.clear();
 		activeTotalMs = 0.0f;
 		activeCpuTotalMs = 0.0f;
+
+		// A skip needs no GPU timing, so it counts on disjoint frames too. A pass that began this frame ran, timed or not.
+		if (!frame.overflowed) {
+			const auto ran = std::span(frame.timers).first(frame.activeCount);
+			for (const auto& name : std::span(frame.skipped.names).first(frame.skipped.count)) {
+				auto it = knownTimerIndex.find(name);
+				if (it == knownTimerIndex.end() || std::ranges::any_of(ran, [&](const auto& timer) { return timer.name == name; }))
+					continue;
+				// lastSampleFrame stays, so a pass that is always skipped still retires.
+				auto& known = knownTimers[it->second];
+				known.gpu.PushSample(0.0f);
+				known.cpu.PushSample(0.0f);
+			}
+		}
 
 		if (disjointData.Disjoint)
 			continue;
@@ -242,31 +267,24 @@ void Profiler::CollectResults()
 				continue;
 
 			float ms = static_cast<float>(static_cast<double>(tsEnd - tsBegin) * ticksToMs);
-			auto [entry, first] = activeTimers.try_emplace(timer.name);
-			if (first)
-				activeOrder.push_back(&entry->first);
-			entry->second.gpuMs += ms;
-			entry->second.cpuMs += timer.cpuMs;
+			auto& entry = activeTimers[timer.name];
+			entry.gpuMs += ms;
+			entry.cpuMs += timer.cpuMs;
 			activeTotalMs += ms;
 			activeCpuTotalMs += timer.cpuMs;
+
+			if (knownTimerIndex.try_emplace(timer.name, knownTimers.size()).second) {
+				KnownTimer kt;
+				kt.name = timer.name;
+				knownTimers.push_back(std::move(kt));
+			}
 		}
 
-		// One sample per name per frame, so a row timed in several places reads as their sum.
-		for (const std::string* name : activeOrder) {
-			const auto& sums = activeTimers[*name];
-			auto& known = FindOrAddTimer(*name);
-			known.gpu.PushSample(sums.gpuMs);
-			known.cpu.PushSample(sums.cpuMs);
-			known.lastSampleFrame = collectedFrames;
-		}
-		for (const auto& name : frame.skipped) {
-			if (activeTimers.contains(name))
-				continue;
-			auto& known = FindOrAddTimer(name);
-			if (known.lastSampleFrame == collectedFrames)
-				continue;
-			known.gpu.PushSample(0.0f);
-			known.cpu.PushSample(0.0f);
+		// A name timed several times in one frame is one sample: its frame total.
+		for (const auto& [name, data] : activeTimers) {
+			auto& known = knownTimers[knownTimerIndex.at(name)];
+			known.gpu.PushSample(data.gpuMs);
+			known.cpu.PushSample(data.cpuMs);
 			known.lastSampleFrame = collectedFrames;
 		}
 	}
@@ -298,6 +316,24 @@ void Profiler::CollectResults()
 		result.historyCount = known.gpu.count;
 		results.push_back(std::move(result));
 	}
+}
+
+double Profiler::QpcTicksToMs()
+{
+	LARGE_INTEGER freq;
+	QueryPerformanceFrequency(&freq);
+	return 1000.0 / static_cast<double>(freq.QuadPart);
+}
+
+Profiler::FrameStats Profiler::GetFrameStats() const
+{
+	return {
+		.lastMs = frameHistory.lastMs,
+		.avgMs = frameHistory.GetAverage(),
+		.p95Ms = frameHistory.GetPercentile(95.0f),
+		.p99Ms = frameHistory.GetPercentile(99.0f),
+		.count = frameHistory.count
+	};
 }
 
 std::vector<Profiler::TimerResult> Profiler::GetStatistics(std::string_view timerPrefix) const

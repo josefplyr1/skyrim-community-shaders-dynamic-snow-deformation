@@ -4,7 +4,7 @@
 
 class BSLightingShaderMaterialPBR;
 
-/** @brief The engine's default land texture: what a quad with no base record, and any layer slot naming form 0, is built from. */
+/** @brief The engine's default land texture, used where a land quad names none. */
 RE::TESLandTexture* GetDefaultLandTexture();
 
 struct GlintParameters
@@ -135,9 +135,10 @@ public:
 		float params2[4];
 		float params3[4];
 		float params4[4];
+		float params5[4];
 		bool operator==(const GrassPBRConstants&) const = default;
 	};
-	static_assert(sizeof(GrassPBRConstants) == 64 && offsetof(GrassPBRConstants, params4) == 48);
+	static_assert(sizeof(GrassPBRConstants) == 80 && offsetof(GrassPBRConstants, params4) == 48 && offsetof(GrassPBRConstants, params5) == 64);
 
 	/** @brief Set the renderer's textures and samplers for a PBR grass material. */
 	static void SetGrassPBRTextures(const BSLightingShaderMaterialPBR* material);
@@ -189,6 +190,8 @@ public:
 
 		RE::NiColor fuzzColor;
 		float fuzzWeight = 0.f;
+		float fuzzRoughness = -1.f;
+		bool fuzzRoughnessTexture = false;
 
 		GlintParameters glintParameters;
 	};

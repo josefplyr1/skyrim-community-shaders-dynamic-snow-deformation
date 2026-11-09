@@ -32,6 +32,26 @@ namespace SnowLighting
 		float landSnowFrac;
 	};
 
+	// Triplanar reads with gradients taken outside the caller's branch.
+	float4 TriplanarGrad(Texture2D<float4> tex, SamplerState samp, float3 worldPos, float3 weights, float scale, float3 dPdx, float3 dPdy)
+	{
+		return tex.SampleGrad(samp, worldPos.yz * scale, dPdx.yz, dPdy.yz) * weights.x +
+		       tex.SampleGrad(samp, worldPos.xz * scale, dPdx.xz, dPdy.xz) * weights.y +
+		       tex.SampleGrad(samp, worldPos.xy * scale, dPdx.xy, dPdy.xy) * weights.z;
+	}
+
+	float4 TriplanarStochasticGrad(Texture2D<float4> tex, SamplerState samp, float3 worldPos, float3 weights, float scale, float noise, float3 dPdx, float3 dPdy)
+	{
+		float4 result = 0;
+		if (noise < weights.x)
+			result = tex.SampleGrad(samp, worldPos.yz * scale, dPdx.yz, dPdy.yz);
+		else if (noise < weights.x + weights.y)
+			result = tex.SampleGrad(samp, worldPos.xz * scale, dPdx.xz, dPdy.xz);
+		else
+			result = tex.SampleGrad(samp, worldPos.xy * scale, dPdx.xy, dPdy.xy);
+		return result;
+	}
+
 	float LandSnowTexel(float3 g)
 	{
 		SNOW_TEXEL_SCORE(score, g, SharedData::snowDeformationSettings.LandRecolorLumLo, 0.18);
@@ -345,7 +365,7 @@ namespace SnowLighting
 			[branch] if (any(s.parallaxShift != 0.0))
 			{
 				const float tiling = ProjectedUVParams.z;
-				projNoise = Triplanar::SampleGrad(TexCharacterLightProjNoiseSampler, SampCharacterLightProjNoiseSampler, worldRel + FrameBuffer::CameraPosAdjust.xyz + s.parallaxShift,
+				projNoise = TriplanarGrad(TexCharacterLightProjNoiseSampler, SampCharacterLightProjNoiseSampler, worldRel + FrameBuffer::CameraPosAdjust.xyz + s.parallaxShift,
 					triWeights, tiling, pDx * tiling, pDy * tiling).x;
 			}
 		}
@@ -398,17 +418,17 @@ namespace SnowLighting
 				[branch] if (SharedData::snowDeformationSettings.ProjSnowNormalEnable > 0.5 && SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
 				{
 					worldNormal = normalize(lerp(worldNormal, vertexNormal, snowVerdict));
-					float3 texN = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowNormal, SNOW_PROJ_SAMPLER, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz * 2.0 - 1.0;
+					float3 texN = TriplanarStochasticGrad(SnowDeformation::HorizonSnowNormal, SNOW_PROJ_SAMPLER, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz * 2.0 - 1.0;
 					SnowGrain(worldNormal, texN, snowTriWeights, screenNoise, snowVerdict);
 				}
 				[branch] if (projectedMaterialWeight > 0.003)
 				{
-				float3 snowProjSample = Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowAlbedo, SNOW_PROJ_SAMPLER, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz;
+				float3 snowProjSample = TriplanarStochasticGrad(SnowDeformation::HorizonSnowAlbedo, SNOW_PROJ_SAMPLER, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz;
 				s.projAlbedo = SnowColor::SetAlbedo(snowProjSample, SharedData::snowDeformationSettings.SnowIsLinear > 0.5);
 				s.projRMAOS = kShellRMAOSDefault;
 				[branch] if (ShellHasRMAOS())
 				{
-					s.projRMAOS = ShellRMAOS(Triplanar::SampleStochasticGrad(SnowDeformation::HorizonSnowRmaos, SNOW_PROJ_SAMPLER, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY));
+					s.projRMAOS = ShellRMAOS(TriplanarStochasticGrad(SnowDeformation::HorizonSnowRmaos, SNOW_PROJ_SAMPLER, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY));
 				}
 #		if defined(TRUE_PBR)
 				baseColor = lerp(baseColor, s.projAlbedo, projectedMaterialWeight);
