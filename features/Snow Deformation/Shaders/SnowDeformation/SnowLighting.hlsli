@@ -30,6 +30,7 @@ namespace SnowLighting
 		float2 landSnowNormal;
 		float4 landSnowRMAOS;
 		float landSnowFrac;
+		float2 pixelPos;
 	};
 
 	// Triplanar reads with gradients taken outside the caller's branch.
@@ -50,6 +51,19 @@ namespace SnowLighting
 		else
 			result = tex.SampleGrad(samp, worldPos.xy * scale, dPdx.xy, dPdy.xy);
 		return result;
+	}
+
+	bool QuadPickObjects()
+	{
+		return (SharedData::snowDeformationSettings.SampleGradAB & 1) != 0;
+	}
+
+	// One triplanar plane per 2x2 quad, so a plain Sample gets clean derivatives. Needs uniform control flow.
+	float2 TriplanarQuadUV(float3 worldPos, float3 weights, float scale, float noise, float2 pixelPos)
+	{
+		float plane = noise < weights.x ? 0.0 : (noise < weights.x + weights.y ? 1.0 : 2.0);
+		plane = Math::QuadReadTopLeft(float2(plane, 0.0), Math::QuadPixel(pixelPos)).x;
+		return (plane < 0.5 ? worldPos.yz : (plane < 1.5 ? worldPos.xz : worldPos.xy)) * scale;
 	}
 
 	float LandSnowTexel(float3 g)
@@ -125,7 +139,20 @@ namespace SnowLighting
 		return frac(float2((p3.x + p3.y) * p3.z, (p3.x + p3.z) * p3.y));
 	}
 
-	SnowSetTaps SnowSetTapsAt(float2 worldRelXY, float2 worldXY)
+	bool QuadPickLand()
+	{
+		return (SharedData::snowDeformationSettings.SampleGradAB & 2) != 0;
+	}
+
+	// A lattice corner's barycentric weight: the hat function of the skewed triangular grid.
+	float SnowSetCornerWeight(float2 lattice, float2 cell)
+	{
+		const float2 d = lattice - cell;
+		return saturate(1.0 - max(max(abs(d.x), abs(d.y)), abs(d.x + d.y)));
+	}
+
+	// With the 2x2 pick on, every pixel of a quad takes the top-left pixel's cells, weighted where it lies. Needs uniform control flow.
+	SnowSetTaps SnowSetTapsAt(float2 worldRelXY, float2 worldXY, float2 pixelPos)
 	{
 		float2 uv = frac(FrameBuffer::CameraPosAdjust.xy / SnowDeformation::SnowUVTile) + worldRelXY / SnowDeformation::SnowUVTile;
 		SnowSetTaps t;
@@ -139,6 +166,16 @@ namespace SnowLighting
 		float2 v1 = cellBase + (upper ? float2(0.0, 1.0) : float2(1.0, 0.0));
 		float2 v2 = cellBase + (upper ? float2(1.0, 0.0) : float2(0.0, 1.0));
 		float3 bary = upper ? float3(f.x + f.y - 1.0, 1.0 - f.x, 1.0 - f.y) : float3(1.0 - f.x - f.y, f.x, f.y);
+		[branch] if (QuadPickLand())
+		{
+			const float2 quadPixel = Math::QuadPixel(pixelPos);
+			const float4 v01 = Math::QuadReadTopLeft(float4(v0, v1), quadPixel);
+			v0 = v01.xy;
+			v1 = v01.zw;
+			v2 = Math::QuadReadTopLeft(v2, quadPixel);
+			const float3 quadBary = float3(SnowSetCornerWeight(lattice, v0), SnowSetCornerWeight(lattice, v1), SnowSetCornerWeight(lattice, v2));
+			bary = dot(quadBary, 1.0) > 1e-6 ? quadBary : float3(1.0, 0.0, 0.0);
+		}
 		bary = pow(bary, 4.0);
 		bary /= dot(bary, 1.0);
 		t.weights = bary;
@@ -150,8 +187,17 @@ namespace SnowLighting
 
 	float4 SnowSetSample(Texture2D<float4> tex, SnowSetTaps t)
 	{
-		return t.weights.x * tex.SampleGrad(SampColorSampler, t.uv0, t.dx, t.dy) + t.weights.y * tex.SampleGrad(SampColorSampler, t.uv1, t.dx, t.dy) +
-		       t.weights.z * tex.SampleGrad(SampColorSampler, t.uv2, t.dx, t.dy);
+		float4 c;
+		[branch] if (QuadPickLand())
+		{
+			c = t.weights.x * tex.Sample(SampColorSampler, t.uv0) + t.weights.y * tex.Sample(SampColorSampler, t.uv1) + t.weights.z * tex.Sample(SampColorSampler, t.uv2);
+		}
+		else
+		{
+			c = t.weights.x * tex.SampleGrad(SampColorSampler, t.uv0, t.dx, t.dy) + t.weights.y * tex.SampleGrad(SampColorSampler, t.uv1, t.dx, t.dy) +
+			    t.weights.z * tex.SampleGrad(SampColorSampler, t.uv2, t.dx, t.dy);
+		}
+		return c;
 	}
 #endif
 
@@ -196,7 +242,7 @@ namespace SnowLighting
 		[branch] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 256) != 0 && bits != 0)
 		{
 			float2 worldXY = worldRel.xy + FrameBuffer::CameraPosAdjust.xy;
-			const SnowSetTaps taps = SnowSetTapsAt(worldRel.xy, worldXY);
+			const SnowSetTaps taps = SnowSetTapsAt(worldRel.xy, worldXY, s.pixelPos);
 
 			float3 a = SnowSetSample(SnowDeformation::HorizonSnowAlbedo, taps).rgb;
 			float3 shellAlbedo = SnowColor::SetAlbedo(a, SharedData::snowDeformationSettings.SnowIsLinear > 0.5);
@@ -287,11 +333,22 @@ namespace SnowLighting
 #	if defined(LODOBJECTS) || defined(LODOBJECTSHD)
 			float lodReplaceW = lodSnowScore * lodReplaceT * smoothstep(0.0, 0.3, normal.z);
 			[branch] if (lodReplaceW > 0.003)
-				lodReplaceW *= TexColorSampler.SampleGrad(SampColorSampler, uv, coverDx, coverDy).a >= 254.5 / 255.0 ? 1.0 : 0.0;
+			{
+				float coverAlpha;
+				[branch] if (QuadPickLand())
+				{
+					coverAlpha = TexColorSampler.SampleBias(SampColorSampler, uv, SharedData::MipBias + 2.0).a;
+				}
+				else
+				{
+					coverAlpha = TexColorSampler.SampleGrad(SampColorSampler, uv, coverDx, coverDy).a;
+				}
+				lodReplaceW *= coverAlpha >= 254.5 / 255.0 ? 1.0 : 0.0;
+			}
 #	else
 			float lodReplaceW = lodSnowScore * lodReplaceT * smoothstep(0.35, 0.65, normal.z);
 #	endif
-			const SnowSetTaps taps = SnowSetTapsAt(worldXYRel, worldXYRel + FrameBuffer::CameraPosAdjust.xy);
+			const SnowSetTaps taps = SnowSetTapsAt(worldXYRel, worldXYRel + FrameBuffer::CameraPosAdjust.xy, s.pixelPos);
 			[branch] if (lodReplaceW > 0.003)
 			{
 				float3 snowSample = SnowSetSample(SnowDeformation::HorizonSnowAlbedo, taps).rgb;
@@ -362,11 +419,18 @@ namespace SnowLighting
 			[flatten] if ((PBRFlags & PBR::Flags::InterlayerParallax) != 0)
 				s.parallaxShift = 0.0;
 #		endif
+			const float3 shiftedPos = worldRel + FrameBuffer::CameraPosAdjust.xyz + s.parallaxShift;
 			[branch] if (any(s.parallaxShift != 0.0))
 			{
 				const float tiling = ProjectedUVParams.z;
-				projNoise = TriplanarGrad(TexCharacterLightProjNoiseSampler, SampCharacterLightProjNoiseSampler, worldRel + FrameBuffer::CameraPosAdjust.xyz + s.parallaxShift,
-					triWeights, tiling, pDx * tiling, pDy * tiling).x;
+				[branch] if (QuadPickObjects())
+				{
+					projNoise = Triplanar::Sample(TexCharacterLightProjNoiseSampler, SampCharacterLightProjNoiseSampler, shiftedPos, triWeights, tiling).x;
+				}
+				else
+				{
+					projNoise = TriplanarGrad(TexCharacterLightProjNoiseSampler, SampCharacterLightProjNoiseSampler, shiftedPos, triWeights, tiling, pDx * tiling, pDy * tiling).x;
+				}
 			}
 		}
 		return projNoise;
@@ -400,9 +464,28 @@ namespace SnowLighting
 #		else
 #			define SNOW_PROJ_SAMPLER SampProjDiffuseSampler
 #		endif
+	float4 ProjSnowRead(Texture2D<float4> tex, SamplerState samp, bool quadPick, float2 quadUV, float3 pos, float3 weights, float noise, float3 dPdx, float3 dPdy)
+	{
+		float4 c;
+		[branch] if (quadPick)
+		{
+			c = tex.Sample(samp, quadUV);
+		}
+		else
+		{
+			c = TriplanarStochasticGrad(tex, samp, pos, weights, 1.0 / SnowDeformation::SnowUVTile, noise, dPdx, dPdy);
+		}
+		return c;
+	}
+
 	void ProjectedRecolor(inout State s, float projWeight, float3 vertexNormal, float3 projWorldPos, float screenNoise,
 		inout float projectedMaterialWeight, inout float3 baseColor, inout float4 rawRMAOS, inout float3 worldNormal)
 	{
+		const bool quadPick = QuadPickObjects();
+		float2 quadUV = 0.0;
+		[branch] if (quadPick && SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 &&
+					 (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0)
+			quadUV = TriplanarQuadUV(projWorldPos + s.parallaxShift, Triplanar::GetWeights(vertexNormal, vertexNormal), 1.0 / SnowDeformation::SnowUVTile, screenNoise, s.pixelPos);
 		s.projMatch = SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 && !s.underWater &&
 		              (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0;
 		[branch] if (s.projMatch)
@@ -418,17 +501,17 @@ namespace SnowLighting
 				[branch] if (SharedData::snowDeformationSettings.ProjSnowNormalEnable > 0.5 && SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
 				{
 					worldNormal = normalize(lerp(worldNormal, vertexNormal, snowVerdict));
-					float3 texN = TriplanarStochasticGrad(SnowDeformation::HorizonSnowNormal, SNOW_PROJ_SAMPLER, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz * 2.0 - 1.0;
+					float3 texN = ProjSnowRead(SnowDeformation::HorizonSnowNormal, SNOW_PROJ_SAMPLER, quadPick, quadUV, snowPos, snowTriWeights, screenNoise, snowGradX, snowGradY).xyz * 2.0 - 1.0;
 					SnowGrain(worldNormal, texN, snowTriWeights, screenNoise, snowVerdict);
 				}
 				[branch] if (projectedMaterialWeight > 0.003)
 				{
-				float3 snowProjSample = TriplanarStochasticGrad(SnowDeformation::HorizonSnowAlbedo, SNOW_PROJ_SAMPLER, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz;
+				float3 snowProjSample = ProjSnowRead(SnowDeformation::HorizonSnowAlbedo, SNOW_PROJ_SAMPLER, quadPick, quadUV, snowPos, snowTriWeights, screenNoise, snowGradX, snowGradY).xyz;
 				s.projAlbedo = SnowColor::SetAlbedo(snowProjSample, SharedData::snowDeformationSettings.SnowIsLinear > 0.5);
 				s.projRMAOS = kShellRMAOSDefault;
 				[branch] if (ShellHasRMAOS())
 				{
-					s.projRMAOS = ShellRMAOS(TriplanarStochasticGrad(SnowDeformation::HorizonSnowRmaos, SNOW_PROJ_SAMPLER, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY));
+					s.projRMAOS = ShellRMAOS(ProjSnowRead(SnowDeformation::HorizonSnowRmaos, SNOW_PROJ_SAMPLER, quadPick, quadUV, snowPos, snowTriWeights, screenNoise, snowGradX, snowGradY));
 				}
 #		if defined(TRUE_PBR)
 				baseColor = lerp(baseColor, s.projAlbedo, projectedMaterialWeight);
@@ -475,9 +558,28 @@ namespace SnowLighting
 #endif
 
 #if !defined(WORLD_MAP) && !defined(LANDSCAPE) && !defined(LODLANDSCAPE) && !defined(LODLANDNOISE) && !defined(LODOBJECTS) && !defined(LODOBJECTSHD)
+	float4 SnowTexRead(Texture2D<float4> tex, bool quadPick, float2 quadUV, float3 pos, float3 weights, float noise)
+	{
+		float4 c;
+		[branch] if (quadPick)
+		{
+			c = tex.Sample(SampColorSampler, quadUV);
+		}
+		else
+		{
+			c = Triplanar::SampleStochastic(tex, SampColorSampler, pos, weights, 1.0 / SnowDeformation::SnowUVTile, noise);
+		}
+		return c;
+	}
+
 	void SnowTexturedRecolor(inout State s, float3 rawBaseColor, float3 vertexNormal, float3 worldRel, float screenNoise,
 		inout float3 baseColor, inout float4 rawRMAOS, inout float3 worldNormal)
 	{
+		const bool quadPick = QuadPickObjects();
+		float2 quadUV = 0.0;
+		[branch] if (quadPick && SharedData::snowDeformationSettings.SnowTexturedEnable > 0.5 &&
+					 (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLODBakedIsSnow) != 0)
+			quadUV = TriplanarQuadUV(worldRel + FrameBuffer::CameraPosAdjust.xyz, Triplanar::GetWeights(vertexNormal, vertexNormal), 1.0 / SnowDeformation::SnowUVTile, screenNoise, s.pixelPos);
 		[branch] if (SharedData::snowDeformationSettings.SnowTexturedEnable > 0.5 && !s.underWater &&
 					 (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLODBakedIsSnow) != 0)
 		{
@@ -491,16 +593,16 @@ namespace SnowLighting
 				[branch] if (SharedData::snowDeformationSettings.ProjSnowNormalEnable > 0.5 && SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
 				{
 					worldNormal = normalize(lerp(worldNormal, vertexNormal, s.texWeight));
-					float3 texN = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowNormal, SampColorSampler, snowTexWorld, snowTexWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz * 2.0 - 1.0;
+					float3 texN = SnowTexRead(SnowDeformation::HorizonSnowNormal, quadPick, quadUV, snowTexWorld, snowTexWeights, screenNoise).xyz * 2.0 - 1.0;
 					SnowGrain(worldNormal, texN, snowTexWeights, screenNoise, s.texWeight);
 				}
-				float3 snowTexSample = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowAlbedo, SampColorSampler, snowTexWorld, snowTexWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz;
+				float3 snowTexSample = SnowTexRead(SnowDeformation::HorizonSnowAlbedo, quadPick, quadUV, snowTexWorld, snowTexWeights, screenNoise).xyz;
 				float3 snowTexAlbedo = SnowColor::SetAlbedo(snowTexSample, SharedData::snowDeformationSettings.SnowIsLinear > 0.5);
 #	if defined(TRUE_PBR)
 				baseColor = lerp(baseColor, snowTexAlbedo, s.texWeight);
 				float4 snowTexRMAOS = kShellRMAOSDefault;
 				[branch] if (ShellHasRMAOS())
-					snowTexRMAOS = ShellRMAOS(Triplanar::SampleStochastic(SnowDeformation::HorizonSnowRmaos, SampColorSampler, snowTexWorld, snowTexWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise));
+					snowTexRMAOS = ShellRMAOS(SnowTexRead(SnowDeformation::HorizonSnowRmaos, quadPick, quadUV, snowTexWorld, snowTexWeights, screenNoise));
 				rawRMAOS = lerp(rawRMAOS, snowTexRMAOS, s.texWeight);
 #	else
 				baseColor = lerp(baseColor, snowTexAlbedo, s.texWeight);
