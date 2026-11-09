@@ -999,7 +999,6 @@ PS_OUTPUT main(PS_INPUT input, bool frontFace : SV_IsFrontFace)
 	PS_OUTPUT psout;
 #	if defined(SNOW_DEFORMATION)
 	SnowLighting::State snowState = (SnowLighting::State)0;
-	snowState.pixelPos = input.Position.xy;
 #	endif
 
 	float3 viewPosition = mul(FrameBuffer::CameraView, float4(input.WorldPosition.xyz, 1)).xyz;

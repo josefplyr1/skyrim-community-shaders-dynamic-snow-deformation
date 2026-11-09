@@ -24,7 +24,7 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	float2 GridToDeformOffset;
 
 	float WarpedHalfSpan;
-	uint SnowMapSampleLevel;
+	uint LayoutKeeper6;
 	uint TerrainDim;
 	uint TrenchDetailLinearMix;
 

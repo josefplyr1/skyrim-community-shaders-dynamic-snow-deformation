@@ -215,17 +215,6 @@ void SnowDeformation::DrawSettings()
 			if (auto _ttWch = Util::HoverTooltipWrapper())
 				ImGui::Text("%s", T(TKEY("workspace_clearing_height_tooltip"), "Snow height remaining in a workspace bowl, as a percent of the surrounding depth. 0 melts to the floor, 100 disables the clearing. Applies within a second."));
 
-			ImGui::SeparatorText(T(TKEY("sample_grad_ab_group"), "Texture Read A/B Tests (not saved)"));
-			ImGui::Checkbox(T(TKEY("ab_ground_sample_level"), "Ground Snow: Fixed Mip Level"), &abGroundSampleLevel);
-			if (auto _ttAbGround = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("ab_ground_sample_level_tooltip"), "Test switch, not saved. The ground snow reads its textures at one fixed sharpness per pixel instead of the full filtered read. It is cheaper but drops the extra filtering for surfaces seen at a low angle, so distant snow may look blurrier. Compare the far snow and the frame time with it on and off."));
-			ImGui::Checkbox(T(TKEY("ab_objects_quad_pick"), "Painted Snow: 2x2 Pixel Pick"), &abObjectsQuadPick);
-			if (auto _ttAbObjects = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("ab_objects_quad_pick_tooltip"), "Test switch, not saved. Snow painted on rocks and other objects picks its texture direction once per 2x2 pixel block instead of per pixel, so the cheaper plain texture read can be used. Look at rock corners, where the directions meet, and at the edges of the snow."));
-			ImGui::Checkbox(T(TKEY("ab_land_quad_cells"), "Land and Horizon Snow: 2x2 Pixel Pick"), &abLandQuadCells);
-			if (auto _ttAbLand = Util::HoverTooltipWrapper())
-				ImGui::Text("%s", T(TKEY("ab_land_quad_cells_tooltip"), "Test switch, not saved. The snow recolor on the landscape and on distant terrain picks its tiling cells once per 2x2 pixel block instead of per pixel, so the cheaper plain texture read can be used. Look for seams in the snow texture on the ground and at the horizon."));
-
 			ImGui::TreePop();
 		}
 		ImGui::PopID();

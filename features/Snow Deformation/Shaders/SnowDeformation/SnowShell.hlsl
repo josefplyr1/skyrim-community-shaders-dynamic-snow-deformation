@@ -629,20 +629,9 @@ float3 ShellLuminanceBump(float3 normalWS, float2 worldXY, float bumpFade)
 	const float3 kLum = float3(0.30, 0.45, 0.25);
 	const float2 detailDx = gDeferredGridDx / kBumpTile;
 	const float2 detailDy = gDeferredGridDy / kBumpTile;
-	float h0, hx, hy;
-	[branch] if (SnowMapSampleLevel != 0)
-	{
-		const float lod = SnowMapLevel(SnowDiffuse, detailDx, detailDy);
-		h0 = dot(SnowDiffuse.SampleLevel(SnowSampler, detailUV, lod).rgb, kLum);
-		hx = dot(SnowDiffuse.SampleLevel(SnowSampler, detailUV + float2(e, 0.0), lod).rgb, kLum);
-		hy = dot(SnowDiffuse.SampleLevel(SnowSampler, detailUV + float2(0.0, e), lod).rgb, kLum);
-	}
-	else
-	{
-		h0 = dot(SnowDiffuse.SampleGrad(SnowSampler, detailUV, detailDx, detailDy).rgb, kLum);
-		hx = dot(SnowDiffuse.SampleGrad(SnowSampler, detailUV + float2(e, 0.0), detailDx, detailDy).rgb, kLum);
-		hy = dot(SnowDiffuse.SampleGrad(SnowSampler, detailUV + float2(0.0, e), detailDx, detailDy).rgb, kLum);
-	}
+	float h0 = dot(SnowDiffuse.SampleGrad(SnowSampler, detailUV, detailDx, detailDy).rgb, kLum);
+	float hx = dot(SnowDiffuse.SampleGrad(SnowSampler, detailUV + float2(e, 0.0), detailDx, detailDy).rgb, kLum);
+	float hy = dot(SnowDiffuse.SampleGrad(SnowSampler, detailUV + float2(0.0, e), detailDx, detailDy).rgb, kLum);
 	float2 bumpGrad = float2(hx - h0, hy - h0) * (kBumpHeight / (e * kBumpTile));
 	return normalize(normalWS + float3(-bumpGrad * bumpFade, 0.0));
 }

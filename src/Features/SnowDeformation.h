@@ -357,7 +357,7 @@ public:
 
 		DirectX::XMINT2 DeformMapOrigin;
 		float LandWetPrint;
-		uint SampleGradAB;
+		float padPrintFullDepth;
 
 		float2 WaterWindowOrigin;
 		float WaterWindowTexel;
@@ -741,7 +741,7 @@ public:
 		float2 GridToDeformOffset;
 
 		float WarpedHalfSpan;
-		uint SnowMapSampleLevel;
+		uint LayoutKeeper6;
 		uint TerrainDim;
 		uint TrenchDetailLinearMix;
 
@@ -1778,10 +1778,6 @@ protected:
 	std::atomic<float> snowFreshness{ 0.0f };
 	float debugFreshnessOverride = -1.0f;
 	bool trenchDetailLinearMix = false;  // A/B test, not saved
-	// SampleGrad A/B tests, not saved: ground snow at SampleLevel, 2x2 picks on objects and on land/horizon.
-	bool abGroundSampleLevel = false;
-	bool abObjectsQuadPick = false;
-	bool abLandQuadCells = false;
 	float GetSnowSoftness() const;
 
 	static constexpr float kAgeingClockStart = 1024.0f;

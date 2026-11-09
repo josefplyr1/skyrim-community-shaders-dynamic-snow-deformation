@@ -993,7 +993,6 @@ void SnowDeformation::DrawShell()
 	cbData.TrenchDetailCoverage = std::clamp(settings.TrenchDetailCoverage, 0.0f, 2.5f);
 	cbData.TrenchDetailShadow = trenchDetail ? std::clamp(settings.ParallaxDepth, 0.0f, 1.0f) : 0.0f;
 	cbData.TrenchDetailLinearMix = trenchDetailLinearMix ? 1u : 0u;
-	cbData.SnowMapSampleLevel = abGroundSampleLevel ? 1u : 0u;
 	cbData.SpeedSpoil = trenchDetail && settings.SpeedSpoil ? 1.0f : 0.0f;
 	cbData.HasSnowNormal = shellSnowNormalSRV ? 1.0f : 0.0f;
 	cbData.HasSnowRmaos = shellSnowRmaosSRV ? 1.0f : 0.0f;

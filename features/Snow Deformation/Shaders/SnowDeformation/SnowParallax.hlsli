@@ -59,33 +59,11 @@ float SampleSnowHeight(SnowTaps taps, float2 uvOffset, float mip)
 
 #ifdef PSHADER
 
-// The trilinear mip for UV gradients: the longer footprint axis, as without anisotropic filtering.
-float SnowMapLevel(Texture2D<float4> tex, float2 duvdx, float2 duvdy)
-{
-	float2 dims;
-	tex.GetDimensions(dims.x, dims.y);
-	const float2 dx = duvdx * dims;
-	const float2 dy = duvdy * dims;
-	return 0.5 * log2(max(max(dot(dx, dx), dot(dy, dy)), 1e-8));
-}
-
 float4 SampleSnowMap(Texture2D<float4> tex, SnowTaps taps)
 {
-	float4 c;
-	[branch] if (SnowMapSampleLevel != 0)
-	{
-		const float lod = SnowMapLevel(tex, taps.duvdx, taps.duvdy);
-		c = taps.weights.x * tex.SampleLevel(SnowSampler, taps.uv0, lod) +
-		    taps.weights.y * tex.SampleLevel(SnowSampler, taps.uv1, lod) +
-		    taps.weights.z * tex.SampleLevel(SnowSampler, taps.uv2, lod);
-	}
-	else
-	{
-		c = taps.weights.x * tex.SampleGrad(SnowSampler, taps.uv0, taps.duvdx, taps.duvdy) +
-		    taps.weights.y * tex.SampleGrad(SnowSampler, taps.uv1, taps.duvdx, taps.duvdy) +
-		    taps.weights.z * tex.SampleGrad(SnowSampler, taps.uv2, taps.duvdx, taps.duvdy);
-	}
-	return c;
+	return taps.weights.x * tex.SampleGrad(SnowSampler, taps.uv0, taps.duvdx, taps.duvdy) +
+	       taps.weights.y * tex.SampleGrad(SnowSampler, taps.uv1, taps.duvdx, taps.duvdy) +
+	       taps.weights.z * tex.SampleGrad(SnowSampler, taps.uv2, taps.duvdx, taps.duvdy);
 }
 
 float SnowHeightMipGrad(float2 duvdx, float2 duvdy)

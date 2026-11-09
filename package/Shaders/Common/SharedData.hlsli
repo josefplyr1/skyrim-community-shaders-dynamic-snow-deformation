@@ -548,8 +548,7 @@ namespace SharedData
 		// recoloured snow darkens like the shell's. Was a pad. Mirror in
 		// SnowDeformation.h.
 		float LandWetPrint;
-		// A/B test bits, not saved: 1 = 2x2 pick on objects, 2 = 2x2 cells on land and horizon.
-		uint SampleGradAB;
+		float padPrintFullDepth;
 
 		// Water raster (t63) frame: world xy of texel (0,0), texel size;
 		// Dim 0 = no raster this frame. Mirror in SnowDeformation.h.

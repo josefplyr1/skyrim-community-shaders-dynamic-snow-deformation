@@ -532,7 +532,6 @@ SnowDeformation::SettingsGPU SnowDeformation::GetCommonBufferData(bool a_inWorld
 	data.ProjSnowNormalEnable = settings.ProjSnowNormals ? 1.0f : 0.0f;
 	data.ParallaxFollow = settings.SnowFollowsParallax ? 1.0f : 0.0f;
 	data.ParallaxFlatten = settings.FlattenParallaxUnderSnow ? 1.0f : 0.0f;
-	data.SampleGradAB = (abObjectsQuadPick ? 1u : 0u) | (abLandQuadCells ? 2u : 0u);
 	data.SnowSpecularLevel = snowSpecularLevel;
 	data.LandRecolorLumLo = kLandRecolorLumLo;
 	data.LandWetPrint = std::clamp(settings.SnowClimateStrength, 0.0f, 1.0f) * GetSnowCondition().wetness;
