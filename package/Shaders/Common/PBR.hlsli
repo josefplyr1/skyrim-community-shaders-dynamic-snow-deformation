@@ -180,7 +180,7 @@ namespace PBR
 	}
 
 	void GetDirectLightInputThinSurface(out DirectLightingOutput lightingOutput, DirectContext context, MaterialProperties material,
-		ThinSurface surface, bool doSpecular, float wrap, float glintH = 0.0f)
+		ThinSurface surface, bool doSpecular, float wrap, float3 glintH = 0.0f)
 	{
 		lightingOutput = (DirectLightingOutput)0;
 
@@ -265,7 +265,7 @@ namespace PBR
 
 			ThinSurface surface = CreateThinSurface(material, NdotV, true, false);
 
-			GetDirectLightInputThinSurface(lightingOutput, context, material, surface, true, 0.0f, mul(tbnTr, context.halfVector).x);
+			GetDirectLightInputThinSurface(lightingOutput, context, material, surface, true, 0.0f, mul(tbnTr, context.halfVector));
 
 			[branch] if (SharedData::truePBRSettings.EnableMicroShadows != 0)
 			{
