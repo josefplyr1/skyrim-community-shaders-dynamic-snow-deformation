@@ -334,8 +334,7 @@ float TrenchDetailHeight(float4 a_uv, float a_w, float a_lod, float a_impact)
 {
 	const float h1 = TrenchDetailHeight01(a_uv.xy, a_lod, a_impact);
 	const float h2 = TrenchDetailHeight01(a_uv.zw, a_lod, a_impact);
-	const float h = TrenchDetailLinearMix != 0 ? lerp(h2, h1, a_w) : StochasticBlendTwoSamples(h1.xxxx, h2.xxxx, a_w, h1, h2).x;
-	return (h - 0.5) * kTrenchDetailSpan;
+	return (lerp(h2, h1, a_w) - 0.5) * kTrenchDetailSpan;
 }
 
 float2 TrenchDetailGrad01(float2 a_uv, float a_lod, float a_impact)
@@ -358,14 +357,7 @@ float2 TrenchDetailGrad(TrenchDetailTaps a_t, float a_lod, float a_impact)
 {
 	const float2 g1 = TrenchDetailRotate(TrenchDetailGrad01(a_t.uv.xy, a_lod, a_impact), a_t.turn.xy * float2(1.0, -1.0));
 	const float2 g2 = TrenchDetailRotate(TrenchDetailGrad01(a_t.uv.zw, a_lod, a_impact), a_t.turn.zw * float2(1.0, -1.0));
-	float2 g = lerp(g2, g1, a_t.w);
-	[branch] if (TrenchDetailLinearMix == 0)
-	{
-		const float h1 = TrenchDetailHeight01(a_t.uv.xy, a_lod, a_impact);
-		const float h2 = TrenchDetailHeight01(a_t.uv.zw, a_lod, a_impact);
-		g = StochasticBlendTwoSamples(float4(g1, 0.0, 0.0), float4(g2, 0.0, 0.0), a_t.w, h1, h2).xy;
-	}
-	return g;
+	return lerp(g2, g1, a_t.w);
 }
 
 float TrenchDetailParallaxT(float3 dir, float2 g, TrenchDetailTaps a_t, float4 a_duv, float3 a_detail, float a_impact, float a_noise)

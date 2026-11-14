@@ -26,7 +26,7 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	float WarpedHalfSpan;
 	uint LayoutKeeper6;
 	uint TerrainDim;
-	uint TrenchDetailLinearMix;
+	uint LayoutKeeper15;
 
 	float DeformInvWorldSize;
 	uint HasSnowTexture;

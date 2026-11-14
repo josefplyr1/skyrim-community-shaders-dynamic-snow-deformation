@@ -743,7 +743,7 @@ public:
 		float WarpedHalfSpan;
 		uint LayoutKeeper6;
 		uint TerrainDim;
-		uint TrenchDetailLinearMix;
+		uint LayoutKeeper15;
 
 		float DeformInvWorldSize;
 		uint HasSnowTexture;
@@ -1777,7 +1777,6 @@ protected:
 	static constexpr float kFreshenHours = 2.0f;
 	std::atomic<float> snowFreshness{ 0.0f };
 	float debugFreshnessOverride = -1.0f;
-	bool trenchDetailLinearMix = false;  // A/B test, not saved
 	float GetSnowSoftness() const;
 
 	static constexpr float kAgeingClockStart = 1024.0f;
