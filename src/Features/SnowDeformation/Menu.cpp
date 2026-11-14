@@ -408,7 +408,7 @@ void SnowDeformation::DrawSettings()
 				shellDataDirty.store(true, std::memory_order_release);
 			}
 			if (auto _ttEntry = Util::HoverTooltipWrapper()) {
-				ImGui::Text("%s\nFamily: %s (%.0f units)", entry.path.c_str(),
+				ImGui::Text(T(TKEY("texture_entry_tooltip"), "%s\nFamily: %s (%.0f units)"), entry.path.c_str(),
 					kSnowClasses[entry.classIndex].label, settings.SnowClassDepths[entry.classIndex]);
 				if (entry.overridden)
 					ImGui::Text("%s", T(TKEY("texture_pinned"), "Pinned to its own value; Reset hands it back."));

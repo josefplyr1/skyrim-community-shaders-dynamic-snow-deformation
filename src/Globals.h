@@ -28,6 +28,7 @@ struct SubsurfaceScattering;
 struct TerrainBlending;
 struct TerrainHelper;
 struct TerrainShadows;
+struct TreeWind;
 struct UnifiedWater;
 struct VolumetricLighting;
 struct WaterEffects;
@@ -44,6 +45,7 @@ struct PostProcessing;
 struct ScreenshotFeature;
 struct Skin;
 struct SceneManager;
+struct ProceduralAurora;
 
 class State;
 class Deferred;
@@ -122,6 +124,7 @@ namespace globals
 		extern TerrainBlending terrainBlending;
 		extern TerrainHelper terrainHelper;
 		extern TerrainShadows terrainShadows;
+		extern TreeWind treeWind;
 		extern UnifiedWater unifiedWater;
 		extern VolumetricLighting volumetricLighting;
 		extern WaterEffects waterEffects;
@@ -142,6 +145,7 @@ namespace globals
 		extern Skin skin;
 		extern SceneManager sceneManager;
 		extern PostProcessing postProcessing;
+		extern ProceduralAurora proceduralAurora;
 
 	}
 

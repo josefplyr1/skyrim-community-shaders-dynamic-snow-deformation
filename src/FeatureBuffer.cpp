@@ -15,6 +15,7 @@
 #include "Features/LODBlending.h"
 #include "Features/LightLimitFix.h"
 #include "Features/LinearLighting.h"
+#include "Features/ProceduralAurora.h"
 #include "Features/ProceduralSun.h"
 #include "Features/RainRefraction.h"
 #include "Features/Skin.h"
@@ -70,5 +71,6 @@ std::pair<unsigned char*, size_t> GetFeatureBufferData(bool a_inWorld)
 		globals::features::horizonFix.GetCommonBufferData(),
 		globals::features::rainRefraction.GetCommonBufferData(),
 		globals::features::proceduralSun.GetCommonBufferData(),
+		globals::features::proceduralAurora.GetCommonBufferData(),
 		globals::features::snowDeformation.GetCommonBufferData(a_inWorld));
 }
