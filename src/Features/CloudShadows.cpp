@@ -8,8 +8,6 @@
 #include "State.h"
 #include "Utils/D3D.h"
 
-#include <sstream>
-
 #define I18N_KEY_PREFIX "feature.cloud_shadows."
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(
@@ -261,38 +259,21 @@ ID3D11VertexShader* CloudShadows::GetCaptureVertexShader()
 		return nullptr;
 
 	const uint32_t descriptor = state->currentVertexDescriptor;
-	auto& entry = captureVertexShaders[descriptor];
-	if (entry.checkedFrame == state->frameCount)
-		return entry.shader.get();
-	entry.checkedFrame = state->frameCount;
+	auto [it, inserted] = captureVertexShaders.try_emplace(descriptor);
+	auto& shader = it->second;
+	if (!inserted)
+		return shader.get();
 
 	// Same defines as the bound sky vertex shader, so the capture variant matches its input layout and the bound pixel shader
-	const auto shaderDefines = SIE::ShaderCache::GetDefinesString(*state->currentShader, descriptor);
-	const auto defines = shaderDefines + ";" + state->GetDefinesString();
-	if (entry.defines == defines)
-		return entry.shader.get();
-	entry.defines = defines;
-	entry.shader = nullptr;
+	auto defines = SIE::ShaderCache::GetDefines(*state->currentShader, descriptor);
+	defines.emplace_back("CLOUD_SHADOWS_CAPTURE", "");
 
-	std::vector<std::string> names;
-	std::vector<std::string> values;
-	std::istringstream tokens(shaderDefines);
-	for (std::string token; tokens >> token;) {
-		const auto separator = token.find('=');
-		names.push_back(token.substr(0, separator));
-		values.push_back(separator == std::string::npos ? std::string{} : token.substr(separator + 1));
-	}
-	std::vector<std::pair<const char*, const char*>> macros;
-	for (size_t i = 0; i < names.size(); i++)
-		macros.emplace_back(names[i].c_str(), values[i].c_str());
-	macros.emplace_back("CLOUD_SHADOWS_CAPTURE", "");
-
-	entry.shader.attach(static_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\Sky.hlsl", macros, "vs_5_0")));
-	if (entry.shader)
-		Util::SetResourceName(entry.shader.get(), "CloudShadows::CaptureVS[%X]", descriptor);
+	shader.attach(static_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\Sky.hlsl", defines, "vs_5_0")));
+	if (shader)
+		Util::SetResourceName(shader.get(), "CloudShadows::CaptureVS[%X]", descriptor);
 	else
 		logger::warn("[Cloud Shadows] Capture vertex shader for sky descriptor {:X} failed to compile; the main view does not capture it", descriptor);
-	return entry.shader.get();
+	return shader.get();
 }
 
 void CloudShadows::CaptureLayerFromView()
@@ -317,6 +298,8 @@ void CloudShadows::CaptureLayerFromView()
 	if (!captureVS)
 		return;
 
+	globals::profiler->BeginPass("CloudShadows::Capture");
+
 	const uint32_t frame = globals::state->frameCount;
 	const int layer = currentLayerForDraw;
 
@@ -336,8 +319,6 @@ void CloudShadows::CaptureLayerFromView()
 		}
 		viewCapturePending = true;
 	}
-
-	globals::state->BeginPerfEvent("CloudShadows::Capture");
 
 	ID3D11RenderTargetView* savedRTVs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
 	ID3D11DepthStencilView* savedDSV = nullptr;
@@ -406,7 +387,7 @@ void CloudShadows::CaptureLayerFromView()
 			object->Release();
 	}
 
-	globals::state->EndPerfEvent();
+	globals::profiler->EndPass();
 }
 
 void CloudShadows::PropagateViewCapture()
@@ -464,12 +445,20 @@ void CloudShadows::EarlyPrepass()
 	// Draws outside the reflections pass read t25 too; an occlusion older than one cube of captures belongs to another sky
 	auto context = globals::d3d::context;
 	const bool current = globals::state->frameCount - lastCaptureFrame <= kCaptureFramesPerCube;
-	if (current)
+	if (current) {
+		globals::profiler->BeginPass("CloudShadows::OcclusionCopy");
 		context->CopyResource(texCubemapCloudOccCopy->resource.get(), texCloudShadowLayers[kMaxCloudLayers - 1]->resource.get());
+		globals::profiler->EndPass();
+	}
 
 	ID3D11ShaderResourceView* srv = current ? texCubemapCloudOccCopy->srv.get() : nullptr;
 	context->PSSetShaderResources(25, 1, &srv);
 	context->CSSetShaderResources(25, 1, &srv);
+}
+
+void CloudShadows::ClearShaderCache()
+{
+	captureVertexShaders.clear();
 }
 
 void CloudShadows::SetupResources()
