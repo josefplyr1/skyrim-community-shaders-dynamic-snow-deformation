@@ -1617,7 +1617,7 @@ public:
 protected:
 	static constexpr UINT kHorizonSnowAlbedoSlot = 33;
 	static constexpr UINT kHorizonSnowNormalSlot = 23;
-	static constexpr UINT kWaterWindowSlot = 63;
+	static constexpr UINT kWaterWindowSlot = 75;
 	static constexpr UINT kHorizonSnowRmaosSlot = 68;
 
 public:

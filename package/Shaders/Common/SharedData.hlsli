@@ -671,7 +671,7 @@ namespace SharedData
 		float padLandWetPrint;
 		float padPrintFullDepth;
 
-		// Water raster (t63) frame: world xy of texel (0,0), texel size;
+		// Water raster (t75) frame: world xy of texel (0,0), texel size;
 		// Dim 0 = no raster this frame. Mirror in SnowDeformation.h.
 		float2 WaterWindowOrigin;
 		float WaterWindowTexel;

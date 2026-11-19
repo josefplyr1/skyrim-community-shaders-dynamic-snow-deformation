@@ -5,7 +5,7 @@ namespace SnowDeformation
 	Texture2D<float4> DeformationMap : register(t101);
 	Texture2D<float4> HorizonSnowAlbedo : register(t33);
 	Texture2D<float4> HorizonSnowNormal : register(t23);
-	Texture2D<float> WaterWindow : register(t63);
+	Texture2D<float> WaterWindow : register(t75);
 	Texture2D<float4> HorizonSnowRmaos : register(t68);
 
 	bool UnderWater(float3 absWorld)
