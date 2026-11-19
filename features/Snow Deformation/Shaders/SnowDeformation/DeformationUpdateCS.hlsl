@@ -59,9 +59,9 @@ cbuffer PerFrame : register(b0)
 	float DrawnPad;
 }
 
-Texture2D<float4> PreviousDeformation : register(t0);
-RWTexture2D<float4> CurrentDeformation : register(u0);
-RWTexture2D<float2> EvolveSnapshot : register(u0);
+Texture2D<float> PreviousDeformation : register(t0);
+RWTexture2D<float2> CurrentDeformation : register(u0);
+RWTexture2D<float> EvolveSnapshot : register(u0);
 StructuredBuffer<uint> StampTiles : register(t2);
 
 RWTexture2D<uint> Occupancy : register(u3);
@@ -87,7 +87,6 @@ int2 TorusPhys(int2 logical, int2 dims)
 RWByteAddressBuffer ActivityFlag : register(u1);
 groupshared uint gActivity;
 groupshared uint gCountR;
-groupshared uint gCountG;
 groupshared uint gCountB;
 groupshared uint gCMinX;
 groupshared uint gCMinY;
@@ -96,10 +95,10 @@ groupshared uint gMaxY;
 groupshared uint gDeltaSum;
 groupshared uint gNonZero;
 
-float4 StoredDelta(float4 a, float4 b)
+float2 StoredDelta(float2 a, float2 b)
 {
-	float4 d = abs(a - b);
-	float4 tol = max(abs(a), abs(b)) * exp2(-11.0) + 1e-6;
+	float2 d = abs(a - b);
+	float2 tol = max(abs(a), abs(b)) * exp2(-11.0) + 1e-6;
 	return max(d - tol, 0.0);
 }
 
@@ -108,7 +107,6 @@ void ActivityReset(uint GIdx)
 	if (GIdx == 0) {
 		gActivity = 0;
 		gCountR = 0;
-		gCountG = 0;
 		gCountB = 0;
 		gCMinX = 0;
 		gCMinY = 0;
@@ -120,21 +118,19 @@ void ActivityReset(uint GIdx)
 	GroupMemoryBarrierWithGroupSync();
 }
 
-void ActivityAccumulate(float4 delta, uint2 pixel)
+void ActivityAccumulate(float2 delta, uint2 pixel)
 {
 	if (any(delta > 0.0)) {
 		InterlockedAdd(gActivity, 1u);
 		if (delta.x > 0.0)
 			InterlockedAdd(gCountR, 1u);
 		if (delta.y > 0.0)
-			InterlockedAdd(gCountG, 1u);
-		if (max(delta.z, delta.w) > 0.0)
 			InterlockedAdd(gCountB, 1u);
 		InterlockedMax(gCMinX, 65535u - pixel.x);
 		InterlockedMax(gCMinY, 65535u - pixel.y);
 		InterlockedMax(gMaxX, pixel.x);
 		InterlockedMax(gMaxY, pixel.y);
-		float maxDelta = max(max(delta.x, delta.y), max(delta.z, delta.w));
+		float maxDelta = max(delta.x, delta.y);
 		InterlockedAdd(gDeltaSum, min((uint)(maxDelta * 1e6 + 0.5), 1000000u));
 	}
 }
@@ -151,7 +147,6 @@ void ActivityPublish(uint GIdx)
 		ActivityFlag.InterlockedMax(16, gMaxX, unused);
 		ActivityFlag.InterlockedMax(20, gMaxY, unused);
 		ActivityFlag.InterlockedAdd(24, gCountR);
-		ActivityFlag.InterlockedAdd(28, gCountG);
 		ActivityFlag.InterlockedAdd(32, gCountB);
 		ActivityFlag.InterlockedAdd(36, gDeltaSum);
 	}
@@ -178,8 +173,7 @@ float SlumpTap(int2 p, int2 dims)
 {
 	if (any(p < 0) || any(p >= dims))
 		return 0.0;
-	float4 t = PreviousDeformation[uint2(TorusPhys(p, dims))];
-	return saturate(t.x - abs(t.y));
+	return saturate(PreviousDeformation[uint2(TorusPhys(p, dims))].x);
 }
 
 [numthreads(64, 1, 1)] void RingCS(uint3 DTid : SV_DispatchThreadID) {
@@ -212,9 +206,9 @@ bool EvolveTexel(uint2 phys)
 
 	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
 
-	const float4 carried = CurrentDeformation[phys];
+	const float2 carried = CurrentDeformation[phys];
 	float deformation = carried.x;
-	float impact = carried.w;
+	float impact = carried.y;
 
 	{
 		float refill = RefillAmount;
@@ -260,7 +254,7 @@ bool EvolveTexel(uint2 phys)
 		}
 	}
 
-	float4 result = float4(deformation, 0.0, 0.0, impact);
+	float2 result = float2(deformation, impact);
 	CurrentDeformation[phys] = result;
 
 	ActivityAccumulate(StoredDelta(result, carried), pixel);
@@ -388,11 +382,11 @@ groupshared uint gSnapRows[SNAPSHOT_SIDE * 8];
 		return;
 	const uint packed = EvolveTilesIn[1 + listIndex];
 	const uint2 texel = uint2(packed & 0xFFFFu, packed >> 16u) * 8u + GTid.xy;
-	EvolveSnapshot[texel] = PreviousDeformation[texel].xy;
+	EvolveSnapshot[texel] = PreviousDeformation[texel];
 }
 
 [numthreads(8, 8, 1)] void SnapshotFullCS(uint3 DTid : SV_DispatchThreadID) {
-	EvolveSnapshot[DTid.xy] = PreviousDeformation[DTid.xy].xy;
+	EvolveSnapshot[DTid.xy] = PreviousDeformation[DTid.xy];
 }
 
 	[numthreads(8, 8, 1)] void ScanBermCS(uint3 DTid : SV_DispatchThreadID, uint GIdx : SV_GroupIndex)
@@ -462,14 +456,14 @@ bool StampTexel(uint2 phys)
 	CurrentDeformation.GetDimensions(dims.x, dims.y);
 	const uint2 pixel = uint2((int2(phys) - MapOrigin) & (int2(dims) - 1));
 
-	const float4 carried = CurrentDeformation[phys];
+	const float2 carried = CurrentDeformation[phys];
 	float deformation = carried.x;
 
 	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
 	float bodyReach = 0.0;
 
 	float carve = deformation;
-	float impact = carried.w;
+	float impact = carried.y;
 
 	for (uint i = 0; i < StampCount; i++) {
 		float2 p0 = StampEnds[i].xy;
@@ -554,7 +548,7 @@ bool StampTexel(uint2 phys)
 			BodyReachMax[phys] = bodyReach;
 	}
 
-	float4 result = float4(min(carve, 1.0), 0.0, 0.0, saturate(impact));
+	float2 result = float2(min(carve, 1.0), saturate(impact));
 	CurrentDeformation[phys] = result;
 
 	ActivityAccumulate(StoredDelta(result, carried), pixel);

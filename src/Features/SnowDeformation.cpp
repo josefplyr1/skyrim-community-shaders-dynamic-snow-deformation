@@ -70,8 +70,8 @@ void SnowDeformation::CreateDeformationTextures()
 		deformationTextures[i] = nullptr;
 	}
 
-	deformationTextures[0] = SD_MakeTexture2D(deformMapDim, deformMapDim, DXGI_FORMAT_R16G16B16A16_FLOAT, "SnowDeformation::DeformationMap");
-	deformationTextures[1] = SD_MakeTexture2D(deformMapDim, deformMapDim, DXGI_FORMAT_R16G16_FLOAT, "SnowDeformation::EvolveScratch");
+	deformationTextures[0] = SD_MakeTexture2D(deformMapDim, deformMapDim, DXGI_FORMAT_R16G16_FLOAT, "SnowDeformation::DeformationMap");
+	deformationTextures[1] = SD_MakeTexture2D(deformMapDim, deformMapDim, DXGI_FORMAT_R16_FLOAT, "SnowDeformation::EvolveScratch");
 
 	delete bermFieldTexture;
 	bermFieldTexture = SD_MakeTexture2D(deformMapDim, deformMapDim, DXGI_FORMAT_R16G16_FLOAT, "SnowDeformation::BermField");

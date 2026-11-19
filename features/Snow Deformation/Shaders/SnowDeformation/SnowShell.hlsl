@@ -49,7 +49,7 @@ float3 WaterBareTexel(float3 texel, int2 t)
 Texture2D<float4> TerrainWindowWet : register(t58);
 Texture2D<float> TerrainBare : register(t26);
 Texture2D<float> TerrainFine : register(t13);
-Texture2D<float4> DeformationMap : register(t1);
+Texture2D<float2> DeformationMap : register(t1);
 
 Texture2D<float4> SnowDiffuse : register(t2);
 Texture2D<float> SceneDepth : register(t3);

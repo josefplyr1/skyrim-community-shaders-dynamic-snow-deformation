@@ -390,7 +390,7 @@ float TrenchDetailSunShadow(TrenchDetailTaps a_t, float a_h, float3 L, float2 g,
 	return lit;
 }
 
-#define SNOW_DEFORM_BILINEAR4(v, gridLocal)                                      \
+#define SNOW_DEFORM_BILINEAR2(v, gridLocal)                                      \
 	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;           \
 	if (any(uv < 0.0) || any(uv > 1.0))                                          \
 		return 0.0;                                                              \
@@ -399,16 +399,16 @@ float TrenchDetailSunShadow(TrenchDetailTaps a_t, float a_h, float3 L, float2 g,
 	int2 t0 = (int2)t;                                                           \
 	float2 f = t - t0;                                                           \
 	int2 t1 = min(t0 + 1, int2(dims) - 1);                                       \
-	float4 s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))); \
-	float4 s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))); \
-	float4 s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))); \
-	float4 s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))); \
-	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y)
+	float2 s00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims))); \
+	float2 s10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims))); \
+	float2 s01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims))); \
+	float2 s11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims))); \
+	float2 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y)
 
 float SampleDetailSpoil(float2 gridLocal)
 {
-	SNOW_DEFORM_BILINEAR4(v, gridLocal);
-	return saturate(v.w);
+	SNOW_DEFORM_BILINEAR2(v, gridLocal);
+	return saturate(v.y);
 }
 
 Texture2D<float> BodyReachMax : register(t56);
@@ -428,10 +428,10 @@ float TrampleDetailScale(float2 worldXY, float deformation)
 		[unroll] for (int i = 0; i < 4; i++)
 		{
 			const int3 texel = DeformTexel(int2((i & 1) ? t1.x : t0.x, (i & 2) ? t1.y : t0.y), int2(dims));
-			const float2 carve = saturate(DeformationMap.Load(texel).xy);
+			const float carve = saturate(DeformationMap.Load(texel).x);
 			const float reach = BodyReachMax.Load(texel);
 			const float layer = reach > 0.0 ? reach : 1.0;
-			const float pressed = max(carve.x - carve.y, 0.0) / layer;
+			const float pressed = carve / layer;
 			packed[i] = saturate((pressed - TrampleStyle.z) / max(1.0 - TrampleStyle.z, 1e-3)) * smoothstep(0.05, 0.5, layer);
 		}
 		scale = lerp(1.0, kTrampledFlattening, lerp(lerp(packed.x, packed.y, f.x), lerp(packed.z, packed.w, f.x), f.y));

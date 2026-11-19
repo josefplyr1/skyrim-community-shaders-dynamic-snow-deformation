@@ -1,6 +1,6 @@
 #include "SnowDeformation/SnowCommon.hlsli"
 
-Texture2D<float4> DeformationMap : register(t0);
+Texture2D<float2> DeformationMap : register(t0);
 RWTexture2D<float2> OutBermField : register(u0);
 StructuredBuffer<uint> BermTilesIn : register(t1);
 
@@ -27,9 +27,9 @@ static const float2 kBermTaps[16] = {
 	float2(-36.96, -15.31), float2(-15.31, -36.96), float2(15.31, -36.96), float2(36.96, -15.31)
 };
 
-float Displaced(float4 texel)
+float Displaced(float2 texel)
 {
-	return saturate(texel.x - max(texel.y, 0.0));
+	return saturate(texel.x);
 }
 
 int3 DeformTexel(int2 t, int2 dims)
@@ -44,10 +44,10 @@ float DeformBilinear(float2 t, float2 dims, bool a_displaced)
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
-	float4 m00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
-	float4 m10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
-	float4 m01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
-	float4 m11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
+	float2 m00 = DeformationMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
+	float2 m10 = DeformationMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
+	float2 m01 = DeformationMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
+	float2 m11 = DeformationMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
 	float4 d = a_displaced ? float4(Displaced(m00), Displaced(m10), Displaced(m01), Displaced(m11)) :
 	                         saturate(float4(m00.x, m10.x, m01.x, m11.x));
 
