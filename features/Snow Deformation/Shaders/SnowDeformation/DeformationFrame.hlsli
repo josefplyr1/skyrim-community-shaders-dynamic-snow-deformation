@@ -19,4 +19,4 @@ float padSlumpRate;
 uint FramePad;
 float GameDeltaTime;
 uint DebugActivityView;
-float AgeingClock;
+float padAgeingClock;

@@ -44,7 +44,6 @@ void SnowDeformation::RunShaderPrime()
 		[&] { GetSnowCS(kBermFieldTiledCS); },
 		[&] { GetSnowCS(kUntouchedTilesCS); },
 		[&] { GetSnowCS(kDeformationRingCS); },
-		[&] { GetSnowCS(kTrackRebaseCS); },
 		[&] { GetSnowCS(kDeformationEvolveCS); },
 		[&] { GetSnowCS(kDeformationStampCS); },
 		[&] { GetSnowCS(kDeformationStampAllCS); },

@@ -719,7 +719,6 @@ void SnowDeformation::PlaceShellFields(ShellCB& a_cb)
 	a_cb.ObjectHeightCenter = heightWindowCenter;
 	a_cb.ObjectHeightHalfExtent = ObjectRasterHalfExtent();
 	a_cb.BermBakeActive = bermFieldTexture ? 1.0f : 0.0f;
-	a_cb.TrackAge = TrackAgeConstants();
 	a_cb.UndulationFieldWindow = { undulationFieldCenter.x, undulationFieldCenter.y, 1.0f / kUndulationFieldHalfExtent,
 		undulationFieldValid ? 1.0f : 0.0f };
 	a_cb.ExclusionFieldWindow = { exclusionFieldCenter.x, exclusionFieldCenter.y, 1.0f / kExclusionFieldHalfExtent,

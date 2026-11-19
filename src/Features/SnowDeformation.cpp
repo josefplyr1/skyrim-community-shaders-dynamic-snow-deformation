@@ -89,11 +89,6 @@ void SnowDeformation::CreateDeformationTextures()
 	bodyReachTexture = SD_MakeTexture2D(deformMapDim, deformMapDim, DXGI_FORMAT_R8_UNORM, "SnowDeformation::BodyReach");
 	globals::d3d::context->ClearUnorderedAccessViewFloat(bodyReachTexture->uav.get(), zero);
 
-	delete trackClockTexture;
-	trackClockTexture = SD_MakeTexture2D(deformMapDim, deformMapDim, DXGI_FORMAT_R16_FLOAT, "SnowDeformation::TrackClock");
-	globals::d3d::context->ClearUnorderedAccessViewFloat(trackClockTexture->uav.get(), zero);
-	snowClimate.ageingRebase = 0.0f;
-
 	{
 		auto device = globals::d3d::device;
 		const uint tiles = deformMapDim / 8;
@@ -684,7 +679,6 @@ void SnowDeformation::PrepassSimulation()
 	snowfallIntensity = ComputeSnowfallIntensity();
 	weatherClock.Read(weatherClockUnarm);
 	TickAccumulation();
-	TickSnowClimate();
 
 	if (SnowShadersPending(1))
 		return;
@@ -777,10 +771,6 @@ void SnowDeformation::PrepassSimulation()
 		}
 	}
 
-	TickSnowAgeing();
-	perFrameData.AgeingClock = snowClimate.ageingClock;
-	perFrameData.TrackRebase = trackClockTexture && bermFieldTexture ? snowClimate.ageingRebase : 0.0f;
-
 	GatherStamps(perFrameData);
 	stampGatherFrame = globals::state->frameCount;
 	DrawContactCapture(context);
@@ -840,7 +830,7 @@ void SnowDeformation::PrepassSimulation()
 		perFrameData.ClearMap == 0 &&
 		perFrameData.ContactDim < 0.5f;
 	const bool mapQuiet = !deformFlagActive && deformFlagSeq > deformLastNonIdleSeq;
-	deformIdleSkipped = inputsIdle && mapQuiet && !tileGridsNeedInit && perFrameData.TrackRebase <= 0.0f;
+	deformIdleSkipped = inputsIdle && mapQuiet && !tileGridsNeedInit;
 
 	if (deformIdleSkipped) {
 		globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Map Update");
@@ -878,39 +868,24 @@ void SnowDeformation::PrepassSimulation()
 				tileGridsNeedInit = false;
 			}
 
-			if (perFrameData.TrackRebase > 0.0f) {
-				if (auto* rebaseCS = GetSnowCS(kTrackRebaseCS)) {
-					ID3D11UnorderedAccessView* rebaseUavs[2] = { trackClockTexture->uav.get(), bermFieldTexture->uav.get() };
-					context->CSSetUnorderedAccessViews(0, 2, rebaseUavs, nullptr);
-					context->CSSetShader(rebaseCS, nullptr, 0);
-					context->Dispatch((deformMapDim + 7) / 8, (deformMapDim + 7) / 8, 1);
-					ID3D11UnorderedAccessView* nullRebase[2] = {};
-					context->CSSetUnorderedAccessViews(0, 2, nullRebase, nullptr);
-				}
-				snowClimate.ageingRebase = 0.0f;
-			}
-
 			ID3D11UnorderedAccessView* uavs[] = { map->uav.get(), deformActivityUAV.get(),
 				nullptr,
 				occupancyUAV.get() };
 			context->CSSetUnorderedAccessViews(0, ARRAYSIZE(uavs), uavs, nullptr);
 			ID3D11UnorderedAccessView* dirtyUAV = bermDirtyUAV.get();
 			context->CSSetUnorderedAccessViews(6, 1, &dirtyUAV, nullptr);
-			ID3D11UnorderedAccessView* clockUAV = trackClockTexture ? trackClockTexture->uav.get() : nullptr;
-			ID3D11UnorderedAccessView* nullClockUAV = nullptr;
+			ID3D11UnorderedAccessView* nullReachUAV = nullptr;
 			ID3D11UnorderedAccessView* reachUAV = bodyReachTexture ? bodyReachTexture->uav.get() : nullptr;
 
 			if (perFrameData.RingTotalTexels > 0) {
 				ID3D11ShaderResourceView* nullRingSrv = nullptr;
 				context->CSSetShaderResources(0, 1, &nullRingSrv);
-				context->CSSetUnorderedAccessViews(4, 1, &clockUAV, nullptr);
 				context->CSSetUnorderedAccessViews(5, 1, &reachUAV, nullptr);
 				context->CSSetShader(GetSnowCS(kDeformationRingCS), nullptr, 0);
 				globals::profiler->BeginPass("SnowDeformation::Trails - Map Update");
 				context->Dispatch((perFrameData.RingTotalTexels + 63) / 64, 1, 1);
 				globals::profiler->EndPass();
-				context->CSSetUnorderedAccessViews(4, 1, &nullClockUAV, nullptr);
-				context->CSSetUnorderedAccessViews(5, 1, &nullClockUAV, nullptr);
+				context->CSSetUnorderedAccessViews(5, 1, &nullReachUAV, nullptr);
 			} else {
 				globals::profiler->MarkPassSkipped("SnowDeformation::Trails - Map Update");
 			}
@@ -988,7 +963,6 @@ void SnowDeformation::PrepassSimulation()
 				context->CSSetShaderResources(7, 2, contactSRVs);
 				ID3D11UnorderedAccessView* passUAV = passStateTexture ? passStateTexture->uav.get() : nullptr;
 				context->CSSetUnorderedAccessViews(7, 1, &passUAV, nullptr);
-				context->CSSetUnorderedAccessViews(4, 1, &clockUAV, nullptr);
 				context->CSSetUnorderedAccessViews(5, 1, &reachUAV, nullptr);
 			}
 			if (stampRan) {
@@ -1027,8 +1001,7 @@ void SnowDeformation::PrepassSimulation()
 				context->CSSetShaderResources(7, 2, nullContact);
 				ID3D11UnorderedAccessView* nullPass = nullptr;
 				context->CSSetUnorderedAccessViews(7, 1, &nullPass, nullptr);
-				context->CSSetUnorderedAccessViews(4, 1, &nullClockUAV, nullptr);
-				context->CSSetUnorderedAccessViews(5, 1, &nullClockUAV, nullptr);
+				context->CSSetUnorderedAccessViews(5, 1, &nullReachUAV, nullptr);
 			}
 		}
 
@@ -1054,10 +1027,8 @@ void SnowDeformation::PrepassSimulation()
 
 			if (auto* bermCS = GetSnowCS(kBermFieldTiledCS)) {
 				context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
-				ID3D11ShaderResourceView* bermSrvs[3] = { map->srv.get(), bermTileSRV.get(), trackClockTexture ? trackClockTexture->srv.get() : nullptr };
+				ID3D11ShaderResourceView* bermSrvs[2] = { map->srv.get(), bermTileSRV.get() };
 				context->CSSetShaderResources(0, ARRAYSIZE(bermSrvs), bermSrvs);
-				ID3D11SamplerState* clockSampler = shellSnowSampler.get();
-				context->CSSetSamplers(0, 1, &clockSampler);
 				ID3D11UnorderedAccessView* bermUavs[] = { bermFieldTexture->uav.get() };
 				context->CSSetUnorderedAccessViews(0, ARRAYSIZE(bermUavs), bermUavs, nullptr);
 				ID3D11UnorderedAccessView* bermOccUAV = bermOccupancyUAV.get();
@@ -1069,8 +1040,6 @@ void SnowDeformation::PrepassSimulation()
 				bermBakeSeq++;
 				context->CSSetUnorderedAccessViews(2, 1, &nullUav, nullptr);
 				context->CSSetUnorderedAccessViews(6, 1, &nullUav, nullptr);
-				ID3D11SamplerState* nullSampler = nullptr;
-				context->CSSetSamplers(0, 1, &nullSampler);
 			} else {
 				const UINT zeroMarks[4] = { 0, 0, 0, 0 };
 				context->ClearUnorderedAccessViewUint(bermDirtyUAV.get(), zeroMarks);
@@ -1141,7 +1110,6 @@ ID3D11ComputeShader* SnowDeformation::GetSnowCS(SnowCS a_which)
 	static constexpr Shader kShaders[kSnowCSCount] = {
 		{ L"Data\\Shaders\\SnowDeformation\\ExclusionFieldCS.hlsl", "main", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "RingCS", nullptr },
-		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "TrackRebaseCS", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "EvolveCS", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "StampCS", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "StampAllCS", nullptr },

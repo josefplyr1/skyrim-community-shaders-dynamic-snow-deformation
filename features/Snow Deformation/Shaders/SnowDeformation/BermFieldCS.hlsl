@@ -2,8 +2,6 @@
 
 Texture2D<float4> DeformationMap : register(t0);
 RWTexture2D<float4> OutBermField : register(u0);
-Texture2D<float> TrackClock : register(t2);
-SamplerState TrackClockSampler : register(s0);
 StructuredBuffer<uint> BermTilesIn : register(t1);
 
 RWTexture2D<uint> OutBermOccupancy : register(u2);
@@ -19,8 +17,6 @@ cbuffer PerFrame : register(b0)
 {
 #include "SnowDeformation/DeformationFrame.hlsli"
 }
-
-static const float kTrackAgeHorizon = 128.0;
 
 static const float kWallBlurReach = 12.0;
 
@@ -41,7 +37,7 @@ int3 DeformTexel(int2 t, int2 dims)
 	return int3((t + MapOrigin) & (dims - 1), 0);
 }
 
-float2 DatedBilinear(float2 t, float2 dims, bool a_displaced)
+float DeformBilinear(float2 t, float2 dims, bool a_displaced)
 {
 	t = clamp(t, 0.0, dims - 1.001);
 	int2 t0 = (int2)t;
@@ -55,19 +51,16 @@ float2 DatedBilinear(float2 t, float2 dims, bool a_displaced)
 	float4 d = a_displaced ? float4(Displaced(m00), Displaced(m10), Displaced(m01), Displaced(m11)) :
 	                         saturate(float4(m00.x, m10.x, m01.x, m11.x));
 
-	float4 date = TrackClock.GatherRed(TrackClockSampler, (float2(t0 + MapOrigin) + 1.0) / dims).wzxy;
-	date = max(date, AgeingClock - kTrackAgeHorizon);
-	float4 w = float4((1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
 	float depth = lerp(lerp(d.x, d.y, f.x), lerp(d.z, d.w, f.x), f.y);
-	return float2(a_displaced ? saturate(depth) : depth, dot(w, d * date));
+	return a_displaced ? saturate(depth) : depth;
 }
 
-float2 Tap(float2 texel, float2 dims, bool a_displaced)
+float Tap(float2 texel, float2 dims, bool a_displaced)
 {
 	float2 uv = (texel + 0.5) / dims;
 	if (any(uv < 0.0) || any(uv > 1.0))
 		return 0.0;
-	return DatedBilinear(texel, dims, a_displaced);
+	return DeformBilinear(texel, dims, a_displaced);
 }
 
 bool BermTexel(uint2 phys)
@@ -80,18 +73,18 @@ bool BermTexel(uint2 phys)
 	float invTexel = 1.0 / max(TexelSize, 1e-4);
 	float2 centre = float2((int2(phys) - MapOrigin) & (int2(dims) - 1));
 
-	float2 b = Tap(centre, dims, true);
+	float b = Tap(centre, dims, true);
 	[unroll] for (int i = 0; i < 16; i++)
 		b += Tap(centre + kBermTaps[i] * (kBermReach * invTexel), dims, true);
 
 	const float blurReach = max(kWallBlurReach * invTexel, 1.0) / 18.0;
-	float2 s = Tap(centre, dims, false);
+	float s = Tap(centre, dims, false);
 	[unroll] for (int j = 0; j < 8; j++)
 		s += Tap(centre + kBermTaps[j] * blurReach, dims, false);
 
-	const float berm = saturate(b.x / 17.0);
-	const float blur = s.x / 9.0;
-	OutBermField[phys] = float4(berm, blur, s.y / 9.0, b.y / 17.0);
+	const float berm = saturate(b / 17.0);
+	const float blur = s / 9.0;
+	OutBermField[phys] = float4(berm, blur, 0.0, 0.0);
 	return berm != 0.0 || blur != 0.0;
 }
 

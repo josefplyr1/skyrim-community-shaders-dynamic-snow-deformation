@@ -601,7 +601,6 @@ void SnowDeformation::DrawShellEarlyPrepass()
 	cb.ObjectHeightCenter = heightWindowCenter;
 	cb.ObjectHeightHalfExtent = ObjectRasterHalfExtent();
 	cb.BermBakeActive = bermFieldTexture ? 1.0f : 0.0f;
-	cb.TrackAge = TrackAgeConstants();
 	cb.UndulationFieldWindow = { undulationFieldCenter.x, undulationFieldCenter.y,
 		1.0f / kUndulationFieldHalfExtent,
 		undulationFieldValid ? 1.0f : 0.0f };
@@ -952,7 +951,6 @@ void SnowDeformation::DrawShell()
 		std::clamp(settings.ParallaxDepth, 0.0f, 2.0f),
 		0.0f
 	};
-	cbData.TrackAge = TrackAgeConstants();
 	cbData.RimStyle = { 0.0f, 0.0f, 0.0f, GetAccumulationDepthScale() };
 	cbData.TrampleStyle = { 0.0f, 0.0f, BodyPrintScale(), 0.0f };
 	EnsureTrenchDetailTextures();

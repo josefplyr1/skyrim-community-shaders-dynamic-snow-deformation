@@ -150,11 +150,9 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 	const bool tiles = !full && bermBakeSeq == marchCacheBermSeq + 1;
 	marchCacheBermSeq = bermBakeSeq;
 	const bool fineMoved = shellFineOriginX != marchCacheFineOrigin[0] || shellFineOriginY != marchCacheFineOrigin[1];
-	const bool tracksAged = std::abs(a_cb.TrackAge.x - marchCacheAgeingClock) > 2.0f;
-	marchCacheAgeingClock = a_cb.TrackAge.x;
 	if (full)
 		marchCacheFastRows = 0;
-	else if (terrainMoved || fineMoved || tracksAged)
+	else if (terrainMoved || fineMoved)
 		marchCacheFastRows = dim;
 	uint32_t nearStart = 0;
 	const uint32_t nearRows = MarchRows(full, dim, kMarchCacheRows, kMarchCacheFastRows, marchCacheFastRows, marchCacheRowCursor, nearStart);
@@ -174,7 +172,7 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 		std::copy(std::begin(sunNow), std::end(sunNow), marchSunDir);
 	if (sunFull)
 		marchSunFastRows = 0;
-	else if (sunTurned || terrainMoved || fineMoved || tracksAged)
+	else if (sunTurned || terrainMoved || fineMoved)
 		marchSunFastRows = dim;
 	uint32_t sunStart = 0;
 	const uint32_t sunRows = MarchRows(sunFull, dim, kMarchSunRows, kMarchSunFastRows, marchSunFastRows, marchSunRowCursor, sunStart);

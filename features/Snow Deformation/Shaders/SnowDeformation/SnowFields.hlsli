@@ -94,8 +94,6 @@ float4 BermFieldBaked(float2 gridLocal)
 
 	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 #endif
-	v.z = v.y > 1e-5 ? v.z / v.y : 0.0;
-	v.w = v.x > 1e-5 ? v.w / v.x : 0.0;
 	return v;
 }
 

@@ -35,28 +35,3 @@ float SnowDeformation::GetAccumulationDepthScale() const
 
 	return 1.0f + snowAccumulation.load(std::memory_order_relaxed) * (kAccumulationPeak - 1.0f);
 }
-
-void SnowDeformation::TickSnowClimate()
-{
-	snowClimate.ageingRate = 1.0f;
-}
-
-void SnowDeformation::TickSnowAgeing()
-{
-	auto& climate = snowClimate;
-	if (gameClock.reversed)
-		return;
-	const float elapsed = gameClock.elapsedHours;
-	if (elapsed <= 0.0f)
-		return;
-	climate.ageingClock += climate.ageingRate * elapsed;
-	while (climate.ageingClock >= 2.0f * kAgeingClockStart) {
-		climate.ageingClock -= kAgeingClockStart;
-		climate.ageingRebase += kAgeingClockStart;
-	}
-}
-
-float4 SnowDeformation::TrackAgeConstants() const
-{
-	return { snowClimate.ageingClock, 0.0f, 0.0f, 0.0f };
-}

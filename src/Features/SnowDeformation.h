@@ -287,13 +287,13 @@ public:
 		uint FramePad;
 		float GameDeltaTime;
 		uint DebugActivityView;
-		float AgeingClock;
+		float padAgeingClock;
 
 		DirectX::XMINT4 RingRects[2];
 		uint RingRectCount;
 		uint RingTotalTexels;
 		uint ForceAllDirty;
-		float TrackRebase;
+		float padTrackRebase;
 
 		float4 Stamps[kMaxStamps];
 		float4 StampEnds[kMaxStamps];
@@ -378,13 +378,6 @@ public:
 
 	Texture2D* passStateTexture = nullptr;
 	Texture2D* bodyReachTexture = nullptr;
-	Texture2D* trackClockTexture = nullptr;
-	static constexpr float kTrackAgeSpan = 24.0f;
-	/** @brief ShellCB::TrackAge: the ageing clock now and the age per clock unit (Track Ageing / kTrackAgeSpan; 0 = tracks never age). */
-	float4 TrackAgeConstants() const;
-	/** @brief The ageing clock in the frame the track dates stand in now: ahead of ageingClock by a rebase the next update has yet to apply. */
-	float TrackDateClock() const { return snowClimate.ageingClock + snowClimate.ageingRebase; }
-	static constexpr float kTrackAgeHorizon = 128.0f;
 	double passClockSeconds = 256.0;
 	static constexpr UINT kUntouchedTilesSlot = 57;
 	static constexpr UINT kBodyReachSlot = 56;
@@ -447,7 +440,6 @@ public:
 	{
 		kExclusionFieldCS,
 		kDeformationRingCS,
-		kTrackRebaseCS,
 		kDeformationEvolveCS,
 		kDeformationStampCS,
 		kDeformationStampAllCS,
@@ -670,7 +662,7 @@ public:
 		float4 SnowParallax;
 
 		float4 padSpellShading;
-		float4 TrackAge;
+		float4 padTrackAge;
 		float4 padCrustLook2;
 		float4 BorderStyle;
 		float4 CompactLook;
@@ -746,7 +738,6 @@ public:
 	bool marchFarValid = false;
 	uint64_t marchCacheKey = 0;
 	uint32_t marchCacheTerrainVersion = 0;
-	float marchCacheAgeingClock = 0.0f;
 	float marchCacheFineOrigin[2] = {};
 	uint32_t marchCacheRowCursor = 0;
 	uint32_t marchFarRowCursor = 0;
@@ -1580,17 +1571,6 @@ protected:
 	std::atomic<float> snowAccumulation{ 0.0f };
 	void TickAccumulation();
 	float GetAccumulationDepthScale() const;
-
-	static constexpr float kAgeingClockStart = 1024.0f;
-	struct SnowClimateState
-	{
-		float ageingClock = kAgeingClockStart;
-		float ageingRate = 0.0f;
-		float ageingRebase = 0.0f;
-	};
-	SnowClimateState snowClimate;
-	void TickSnowClimate();
-	void TickSnowAgeing();
 
 	uint32_t stampGatherFrame = UINT32_MAX;
 

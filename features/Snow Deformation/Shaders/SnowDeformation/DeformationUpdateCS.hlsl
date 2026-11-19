@@ -36,7 +36,7 @@ cbuffer PerFrame : register(b0)
 	uint RingRectCount;
 	uint RingTotalTexels;
 	uint ForceAllDirty;
-	float TrackRebase;
+	float padTrackRebase;
 
 	float4 Stamps[MAX_STAMPS];
 	float4 StampEnds[MAX_STAMPS];
@@ -62,10 +62,6 @@ cbuffer PerFrame : register(b0)
 Texture2D<float4> PreviousDeformation : register(t0);
 RWTexture2D<float4> CurrentDeformation : register(u0);
 RWTexture2D<float2> EvolveSnapshot : register(u0);
-#define TRACK_AGE_HORIZON 128.0
-RWTexture2D<float> TrackClock : register(u4);
-static const float kTrackCutMin = 0.02;
-static const float kTrackFloorMargin = 0.1;
 StructuredBuffer<uint> StampTiles : register(t2);
 
 RWTexture2D<uint> Occupancy : register(u3);
@@ -99,7 +95,6 @@ groupshared uint gMaxX;
 groupshared uint gMaxY;
 groupshared uint gDeltaSum;
 groupshared uint gNonZero;
-groupshared uint gClockMoved;
 
 float4 StoredDelta(float4 a, float4 b)
 {
@@ -121,7 +116,6 @@ void ActivityReset(uint GIdx)
 		gMaxY = 0;
 		gDeltaSum = 0;
 		gNonZero = 0;
-		gClockMoved = 0;
 	}
 	GroupMemoryBarrierWithGroupSync();
 }
@@ -206,28 +200,8 @@ float SlumpTap(int2 p, int2 dims)
 
 	const uint2 phys = uint2(TorusPhys(logical, int2(dims)));
 	CurrentDeformation[phys] = 0.0;
-	TrackClock[phys] = 0.0;
 	BodyReachMax[phys] = 0.0;
 	BermDirty[phys >> 3] = 1u;
-}
-
-RWTexture2D<float> TrackClockRebase : register(u0);
-RWTexture2D<float4> BermFieldRebase : register(u1);
-
-[numthreads(8, 8, 1)] void TrackRebaseCS(uint3 DTid : SV_DispatchThreadID) {
-	uint2 dims;
-	TrackClockRebase.GetDimensions(dims.x, dims.y);
-	if (any(DTid.xy >= dims))
-		return;
-	const float cut = TrackClockRebase[DTid.xy];
-	[branch] if (cut > 0.0)
-		TrackClockRebase[DTid.xy] = max(cut - TrackRebase, 1.0);
-	float4 berm = BermFieldRebase[DTid.xy];
-	[branch] if (max(berm.z, berm.w) > 0.0)
-	{
-		berm.zw = berm.zw > 0.0 ? max(berm.zw - TrackRebase * berm.yx, berm.yx) : 0.0;
-		BermFieldRebase[DTid.xy] = berm;
-	}
 }
 
 bool EvolveTexel(uint2 phys)
@@ -493,7 +467,6 @@ bool StampTexel(uint2 phys)
 
 	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
 	float bodyReach = 0.0;
-	float cutNow = 0.0;
 
 	float carve = deformation;
 	float impact = carried.w;
@@ -526,7 +499,6 @@ bool StampTexel(uint2 phys)
 			else
 			{
 				carve = max(carve, printed);
-				cutNow = max(cutNow, printed);
 			}
 
 			impact = max(impact, impactE * (1.0 - smoothstep(0.6, 1.3, edgeCoord)));
@@ -567,7 +539,6 @@ bool StampTexel(uint2 phys)
 				propPrinted = saturate(1.0 - ContactAboveDrawn(worldPos, contact.y, dune)) * cover.y;
 			bodyReach = max(bodyReach, bodyContact);
 			carve = max(carve, propPrinted);
-			cutNow = max(cutNow, propPrinted);
 		}
 	}
 
@@ -582,19 +553,9 @@ bool StampTexel(uint2 phys)
 		[branch] if (bodyReach > BodyReachMax[phys] + 0.5 / 255.0)
 			BodyReachMax[phys] = bodyReach;
 	}
-	cutNow = max(cutNow, bodyReach);
 
 	float4 result = float4(min(carve, 1.0), 0.0, 0.0, saturate(impact));
 	CurrentDeformation[phys] = result;
-
-	[branch] if (cutNow > kTrackCutMin && cutNow >= deformation - kTrackFloorMargin)
-	{
-		[branch] if (abs(TrackClock[phys] - AgeingClock) > 0.5)
-		{
-			TrackClock[phys] = AgeingClock;
-			InterlockedOr(gClockMoved, 1u);
-		}
-	}
 
 	ActivityAccumulate(StoredDelta(result, carried), pixel);
 	return any(result != 0.0);
@@ -609,7 +570,7 @@ bool StampTexel(uint2 phys)
 	ActivityPublish(GIdx);
 	if (GIdx == 0) {
 		Occupancy[tile] = gNonZero;
-		if (gActivity != 0 || gClockMoved != 0)
+		if (gActivity != 0)
 			BermDirty[tile] = 1u;
 	}
 }
@@ -622,7 +583,7 @@ bool StampTexel(uint2 phys)
 	ActivityPublish(GIdx);
 	if (GIdx == 0) {
 		Occupancy[Gid.xy] = gNonZero;
-		if (gActivity != 0 || gClockMoved != 0)
+		if (gActivity != 0)
 			BermDirty[Gid.xy] = 1u;
 	}
 }
