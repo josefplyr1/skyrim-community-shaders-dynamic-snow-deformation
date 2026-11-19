@@ -4050,7 +4050,7 @@
     "feature.snow_deformation.preset_low": "Low",
     "feature.snow_deformation.preset_medium": "Medium",
     "feature.snow_deformation.quality_presets": "Quality Preset:",
-    "feature.snow_deformation.quality_presets_tooltip": "Sets the snow's performance in one click. High, the default: every effect on, trails drawn out to 200 m and a 4096 trail map. Medium: no sparkle or contact shadows on the snow, half the parallax, trails out to 115 m (NPCs 105 m) and a 2048 map. Low: no sparkle, snow shadows, self-shadowing, parallax or tessellation, trails out to 29 m (NPCs 10 m) and a 1024 map. Custom means the saved settings match no preset. Changing the map size or the trail range clears the trails.",
+    "feature.snow_deformation.quality_presets_tooltip": "Sets the snow's performance in one click. High, the default: every effect on, trails drawn out to 200 m and a 4096 trail map. Medium: no sparkle or contact shadows on the snow, half the parallax, trails out to 115 m (NPCs 105 m) and a 2048 map. Low: no sparkle, snow shadows, self-shadowing or parallax, trails out to 29 m (NPCs 10 m) and a 1024 map. Custom means the saved settings match no preset. Changing the map size or the trail range clears the trails.",
     "feature.snow_deformation.refill_rate": "Snow Refill Rate",
     "feature.snow_deformation.refill_rate_tooltip": "How fast trails fill back in. They fill only while it snows, faster in heavier snowfall. At 1.0x, typical snowfall fills a trail in about 12 minutes; 0 stops refilling.",
     "feature.snow_deformation.reload_texture": "Reload",

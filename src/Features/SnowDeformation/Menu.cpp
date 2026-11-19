@@ -84,12 +84,11 @@ namespace
 		bool contactShadows;
 		bool selfShadowing;
 		bool castsShadows;
-		bool tessellate;
 	};
 	constexpr QualityPreset kQualityPresets[SnowDeformation::kQualityPresetCount] = {
-		{ 1024u, 29.0f, 10.0f, 0.0f, 0.0f, false, false, false, false, false },
-		{ 2048u, 115.0f, 105.0f, 0.25f, 0.13f, false, false, true, true, true },
-		{ 4096u, 200.0f, 200.0f, 0.5f, 0.25f, true, true, true, true, true },
+		{ 1024u, 29.0f, 10.0f, 0.0f, 0.0f, false, false, false, false },
+		{ 2048u, 115.0f, 105.0f, 0.25f, 0.13f, false, false, true, true },
+		{ 4096u, 200.0f, 200.0f, 0.5f, 0.25f, true, true, true, true },
 	};
 }
 
@@ -105,7 +104,6 @@ void SnowDeformation::ApplyQualityPreset(int a_preset)
 		trenchRangeDirty = true;
 	}
 	settings.RangeActorTrenchesM = p.actorTrenchesM;
-	settings.Tessellation = p.tessellate;
 	settings.ParallaxDepth = p.parallaxDepth;
 	settings.ParallaxShadowStrength = p.parallaxShadow;
 	settings.SnowGlints = p.sparkle;
@@ -120,7 +118,7 @@ int SnowDeformation::MatchingQualityPreset() const
 		const auto& p = kQualityPresets[i];
 		if (settings.DeformMapResolution == p.mapDim && settings.RangeTrenchesM == p.trenchesM &&
 			settings.RangeActorTrenchesM == p.actorTrenchesM &&
-			settings.Tessellation == p.tessellate && settings.ParallaxDepth == p.parallaxDepth && settings.ParallaxShadowStrength == p.parallaxShadow &&
+			settings.ParallaxDepth == p.parallaxDepth && settings.ParallaxShadowStrength == p.parallaxShadow &&
 			settings.SnowGlints == p.sparkle && settings.SnowScreenSpaceShadows == p.contactShadows && settings.ShellHorizonMarch == p.selfShadowing &&
 			settings.SnowCastsShadows == p.castsShadows)
 			return i;
@@ -141,7 +139,7 @@ void SnowDeformation::DrawSettings()
 		ImGui::AlignTextToFramePadding();
 		ImGui::TextUnformatted(T(TKEY("quality_presets"), "Quality Preset:"));
 		if (auto _ttPresets = Util::HoverTooltipWrapper())
-			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the snow's performance in one click. High, the default: every effect on, trails drawn out to 200 m and a 4096 trail map. Medium: no sparkle or contact shadows on the snow, half the parallax, trails out to 115 m (NPCs 105 m) and a 2048 map. Low: no sparkle, snow shadows, self-shadowing, parallax or tessellation, trails out to 29 m (NPCs 10 m) and a 1024 map. Custom means the saved settings match no preset. Changing the map size or the trail range clears the trails."));
+			ImGui::Text("%s", T(TKEY("quality_presets_tooltip"), "Sets the snow's performance in one click. High, the default: every effect on, trails drawn out to 200 m and a 4096 trail map. Medium: no sparkle or contact shadows on the snow, half the parallax, trails out to 115 m (NPCs 105 m) and a 2048 map. Low: no sparkle, snow shadows, self-shadowing or parallax, trails out to 29 m (NPCs 10 m) and a 1024 map. Custom means the saved settings match no preset. Changing the map size or the trail range clears the trails."));
 		const char* presetLabels[kQualityPresetCount] = { T(TKEY("preset_low"), "Low"), T(TKEY("preset_medium"), "Medium"), T(TKEY("preset_high"), "High") };
 		const int activePreset = MatchingQualityPreset();
 		for (int i = 0; i < kQualityPresetCount; i++) {

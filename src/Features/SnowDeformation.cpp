@@ -15,7 +15,6 @@
 	X(EnableSnowAccumulation)      \
 	X(TextureDepths)               \
 	X(SnowTexturePath)             \
-	X(Tessellation)                \
 	X(ParallaxShadowStrength)      \
 	X(ParallaxDepth)               \
 	X(SnowResistance)              \

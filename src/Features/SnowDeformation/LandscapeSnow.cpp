@@ -914,7 +914,7 @@ uint32_t SnowDeformation::DrawLandscapeSnowPrepass(ID3D11DeviceContext* a_contex
 			return false;
 		const float dx = c.x - cam.x;
 		const float dy = c.y - cam.y;
-		const bool tessNear = cfg.tessellate && settings.Tessellation && std::sqrt(dx * dx + dy * dy) - r < cfg.tessReach;
+		const bool tessNear = cfg.tessellate && std::sqrt(dx * dx + dy * dy) - r < cfg.tessReach;
 		LsCBData data{
 			{ float(cap.translate[0] - double(a_cb.GridOrigin.x)), float(cap.translate[1] - double(a_cb.GridOrigin.y)), float(cap.translate[2]), std::max(cfg.lift, 0.0f) },
 			{ 1.0f, tessNear ? std::clamp(cfg.maxFactor, 1.0f, 64.0f) : 1.0f, float(gateMask), cfg.cull ? 1.0f : 0.0f },
@@ -1032,7 +1032,7 @@ void SnowDeformation::LandscapeSnowSetup(RE::BSRenderPass* a_pass, bool a_lighti
 		if (boundXY.x + boundRadius < r.x || boundXY.y + boundRadius < r.y || boundXY.x - boundRadius > r.z || boundXY.y - boundRadius > r.w)
 			want = LsMode::kNone;
 	}
-	if (want == LsMode::kRaise && cfg.tessellate && settings.Tessellation) {
+	if (want == LsMode::kRaise && cfg.tessellate) {
 		const auto& cam = lsCB.CameraPosAdjust;
 		const float dx = boundXY.x - cam.x;
 		const float dy = boundXY.y - cam.y;

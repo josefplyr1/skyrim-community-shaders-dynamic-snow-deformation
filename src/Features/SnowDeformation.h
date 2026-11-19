@@ -184,7 +184,6 @@ public:
 		bool EnableSnowAccumulation = true;
 		std::map<std::string, float> TextureDepths;
 		std::string SnowTexturePath = "Textures\\PBR\\Landscape\\snow01.dds";
-		bool Tessellation = true;
 		float ParallaxShadowStrength = 0.25f;
 		float ParallaxDepth = 0.5f;
 		float SnowResistance = 33.0f;
