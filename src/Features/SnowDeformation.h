@@ -1614,41 +1614,6 @@ protected:
 	bool ActorIsIncorporeal(RE::Actor* a_actor, RE::NiAVObject* a_root, StampBones* a_bones, float* a_alphaOut = nullptr) const;
 	static bool IsProxyOrOverlayGeometry(const RE::BSGeometry* a_geometry, const RE::BSShaderProperty* a_property);
 
-	struct StampStats
-	{
-		uint feet = 0;
-		uint limbs = 0;
-		uint shapes = 0;
-		uint props = 0;
-		uint propRefs = 0;
-		uint propMovers = 0;
-		uint propsRasterized = 0;
-		uint actorsRasterized = 0;
-		uint corpsesRasterized = 0;
-		uint corpsesLatched = 0;
-		uint spells = 0;
-		uint beforeSpells = 0;
-		uint incorporeal = 0;
-		uint nearestFeet = 0;
-		uint nearestLimbs = 0;
-		uint nearestUsableFeet = 0;
-		bool nearestFallback = false;
-		float nearestDryTravel = 0.0f;
-		uint fallbackActors = 0;
-		uint floating = 0;
-		float nearestGapToRoot = 0.0f;
-		float nearestGapToLand = 0.0f;
-		uint nearestState = 0;
-		bool nearestFloating = false;
-		bool nearestValid = false;
-		float nearestBodyAlpha = 1.0f;
-		std::string nearestBodyAlphaSource;
-		bool nearestIncorporeal = false;
-		uint32_t nearestFormID = 0;
-		uint budgetTurnedAway = 0;
-	};
-	StampStats stampStats;
-
 	struct PropAnchor
 	{
 		RE::NiPoint3 pos;
