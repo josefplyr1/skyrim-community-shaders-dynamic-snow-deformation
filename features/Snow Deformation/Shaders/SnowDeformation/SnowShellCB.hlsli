@@ -41,32 +41,27 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 
 	float EnableGlints;
 	float HasSnowHeight;
-	float SnowReliefDepth;
 	float TrenchDetailRelief;
+	float TrenchDetailShadow;
 
-	float ObjectLiftCap;
-	float ObjectHeightHalfExtent;
 	float2 ObjectHeightCenter;
+	float ObjectHeightHalfExtent;
+	float BermBakeActive;
 
 	float CrispShadows;
 	float ScreenSpaceShadowsActive;
 	float PointLightsActive;
 	float SkylightingActive;
 
-	float TrenchDetailShadow;
+	float2 SunCascadeSlices;
+	float2 LandContest;
+
+	float3 SnowParallax;
 	float SeamRampInv;
-	float BermBakeActive;
-	float pad0;
 
 	float4 SeamBounds;
 
 	float4 ExclusionFieldWindow;
-
-	float4 SnowParallax;
-
-	float4 BorderStyle;
-	float4 CompactLook;
-	float4 RimStyle;
 
 	float4 UndulationFieldWindow;
 
@@ -74,9 +69,12 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	int2 ShellFlags;
 
 	float4 FineWindow;
-	float4 TrampleStyle;
 	float4 TessScreen;
 	float4 FieldDims;
+
+	float AccumulationDepthScale;
+	float BodyPrint;
+	float2 pad0;
 }
 
 // The trench look's fixed values.

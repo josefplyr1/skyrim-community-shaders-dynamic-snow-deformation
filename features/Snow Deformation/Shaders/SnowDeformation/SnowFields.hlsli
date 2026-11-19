@@ -432,7 +432,7 @@ float TrampleDetailScale(float2 worldXY, float deformation)
 			const float reach = BodyReachMax.Load(texel);
 			const float layer = reach > 0.0 ? reach : 1.0;
 			const float pressed = carve / layer;
-			packed[i] = saturate((pressed - TrampleStyle.z) / max(1.0 - TrampleStyle.z, 1e-3)) * smoothstep(0.05, 0.5, layer);
+			packed[i] = saturate((pressed - BodyPrint) / max(1.0 - BodyPrint, 1e-3)) * smoothstep(0.05, 0.5, layer);
 		}
 		scale = lerp(1.0, kTrampledFlattening, lerp(lerp(packed.x, packed.y, f.x), lerp(packed.z, packed.w, f.x), f.y));
 	}

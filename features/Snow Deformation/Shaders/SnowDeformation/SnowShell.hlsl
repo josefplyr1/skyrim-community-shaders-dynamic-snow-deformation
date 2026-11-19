@@ -142,7 +142,7 @@ float3 SampleTerrain(float2 gridLocal)
 		result.x = fine;
 	else if (min(min(s00.x, s10.x), min(s01.x, s11.x)) > -50000.0)
 		result.x = TriangulatedHeight(s00.x, s10.x, s01.x, s11.x, f);
-	result.y = max(result.y, 0.0) * RimStyle.w + min(result.y, 0.0);
+	result.y = max(result.y, 0.0) * AccumulationDepthScale + min(result.y, 0.0);
 	return result;
 }
 
@@ -220,10 +220,7 @@ float2 SampleObjectBottom(float2 worldXY)
 
 float2 SampleExclusionMask(float2 worldXY)
 {
-	float2 nearMask = 0.0;
-	[branch] if (ObjectLiftCap > 0.0)
-		nearMask = SampleObjectBottom(worldXY);
-	return max(nearMask, SampleExclusionField(worldXY));
+	return max(SampleObjectBottom(worldXY), SampleExclusionField(worldXY));
 }
 
 float2 BermFieldPair(float2 gridLocal)
@@ -322,7 +319,7 @@ float LandSnowOdds(float masksY)
 
 float LandSnowSide(float remaining, float carve)
 {
-	return CompactLook.y * remaining - CompactLook.z * smoothstep(0.3, 1.0, carve);
+	return LandContest.x * remaining - LandContest.y * smoothstep(0.3, 1.0, carve);
 }
 
 static const float kShoreRise = 10.0;
@@ -479,19 +476,6 @@ float ShellVertexZFrom(float2 gridLocal, float z, float coverage, float terrainH
 		float wBillow = saturate(wEdge + (hDescent - 0.5) * kEdgeBillowShift * billowW);
 		float descent = SnowHeightBlendOneSided(wBillow, hDescent, 1.0 + (descentBlend - 1.0) * 0.5);
 		z = terrainHeight + (z - terrainHeight) * descent - 8.0 * (1.0 - descent);
-	}
-
-	[branch] if (HasSnowHeight > 0.5 && SnowReliefDepth > 0.01)
-	{
-		float reliefFade = 1.0 - smoothstep(600.0, 2200.0, camDist);
-		float depthAbove = z - terrainHeight;
-		[branch] if (reliefFade > 0.001 && depthAbove > 0.5)
-		{
-			SnowTaps reliefTaps = ComputeSnowTapsNoGrad(snowUV, GridOrigin + gridLocal);
-			float h = SampleSnowHeight(reliefTaps, 0.0.xx, snowMip);
-			float carve = saturate(SampleDeformationSmooth(gridLocal));
-			z += (h - 0.5) * SnowReliefDepth * reliefFade * saturate(depthAbove / 6.0) * (1.0 - carve);
-		}
 	}
 
 	return z;
@@ -969,7 +953,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	float sunShadow;
 	[branch] if (CrispShadows > 0.5)
 	{
-		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(shadePos, normalWS, lerp(1.0, 6.0, farShadowT), uint2((uint)BorderStyle.z, (uint)BorderStyle.w));
+		sunShadow = worldShadow * SnowShadow::GetCascadeShadow(shadePos, normalWS, lerp(1.0, 6.0, farShadowT), uint2((uint)SunCascadeSlices.x, (uint)SunCascadeSlices.y));
 	}
 	else
 	{
@@ -1021,7 +1005,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		float sssVertGap = abs(input.WorldPos.z) * sssRayGap / max(shellZ, 1e-3);
 		float sssBlend = (1.0 - smoothstep(8.0, 24.0, sssVertGap)) *
 		                 (1.0 - smoothstep(150.0, 400.0, sssRayGap));
-		[branch] if (ObjectLiftCap > 0.0 && sssBlend > 0.001)
+		[branch] if (sssBlend > 0.001)
 		{
 			float2 sunXY = L.xy / max(length(L.xy), 1e-4);
 			float sssSurfZ = input.WorldPos.z + ShellCameraPosAdjust.z;

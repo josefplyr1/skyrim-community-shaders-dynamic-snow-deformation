@@ -15,6 +15,8 @@ static const float kShelterMaxHeight = 275.0;
 static const float kShelterBandHeight = max(250.0, kShelterMaxHeight);
 // tan(30 degrees): how far from straight down the snow blows in under cover.
 static const float kShelterConeTan = 0.577350259;
+// Height a carried-over texel loses each update, so ghosts of moved objects fade.
+static const float kGhostDecay = 0.5;
 
 cbuffer GhostCB : register(b2)
 {
@@ -83,8 +85,8 @@ uint ScrollTexel(uint2 texel, uint2 dims)
 	if (!ClearAll) {
 		int2 src = int2(dtid.xy) + ScrollDelta;
 		if (all(src >= 0) && all(src < int2(dims))) {
-			top = InA[uint2(src)] - GhostDecay;
-			bottom = InB[uint2(src)] + GhostDecay;
+			top = InA[uint2(src)] - kGhostDecay;
+			bottom = InB[uint2(src)] + kGhostDecay;
 		}
 	}
 
@@ -101,7 +103,7 @@ uint ScrollTexel(uint2 texel, uint2 dims)
 
 	OutA[dtid.xy] = top;
 	OutB[dtid.xy] = bottom;
-	bool dead = DeadGhostTiles != 0 && bottom - top > kShelterBandHeight + 61.0;
+	bool dead = bottom - top > kShelterBandHeight + 61.0;
 	return (top > -50000.0 && bottom < 50000.0 && !dead) ? 1u : 0u;
 }
 

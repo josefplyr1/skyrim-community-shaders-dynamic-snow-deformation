@@ -944,15 +944,13 @@ void SnowDeformation::DrawShell()
 	cbData.HasSnowTexture = shellSnowDiffuseSRV != nullptr;
 	cbData.SnowTextureIsLinear = shellSnowTextureIsPBR ? 1.0f : 0.0f;
 	cbData.HasSnowHeight = shellSnowHeightSRV ? 1.0f : 0.0f;
-	cbData.SnowReliefDepth = 0.0f;
 	cbData.SnowParallax = {
 		snowDisplacementScale,
 		std::clamp(settings.ParallaxShadowStrength, 0.0f, 2.0f),
-		std::clamp(settings.ParallaxDepth, 0.0f, 2.0f),
-		0.0f
+		std::clamp(settings.ParallaxDepth, 0.0f, 2.0f)
 	};
-	cbData.RimStyle = { 0.0f, 0.0f, 0.0f, GetAccumulationDepthScale() };
-	cbData.TrampleStyle = { 0.0f, 0.0f, BodyPrintScale(), 0.0f };
+	cbData.AccumulationDepthScale = GetAccumulationDepthScale();
+	cbData.BodyPrint = BodyPrintScale();
 	EnsureTrenchDetailTextures();
 	const bool trenchDetail = trenchDetailNormalSRV && trenchDetailHeightSRV;
 	cbData.TrenchDetailRelief = trenchDetail ? 1.0f : 0.0f;
@@ -963,12 +961,10 @@ void SnowDeformation::DrawShell()
 	cbData.SnowGlintParams = { snowGlintLogDensity, snowGlintMicroRoughness, snowGlintDensityRandomization, snowGlintScreenSpaceScale };
 	cbData.SnowSpecularLevel = snowSpecularLevel;
 	cbData.EnableGlints = (settings.SnowGlints && globals::features::truePBR.glintsNoiseTexture) ? 1.0f : 0.0f;
-	cbData.BorderStyle = { 0.0f, 0.0f, (float)sunCascadeSlice[0], (float)sunCascadeSlice[1] };
+	cbData.SunCascadeSlices = { (float)sunCascadeSlice[0], (float)sunCascadeSlice[1] };
 	const auto& dynRes = globals::game::frameBufferCached.GetDynamicResolutionParams1();
-	const float2 landContest = LandBlendContest();
-	cbData.CompactLook = { 0.0f, landContest.x, landContest.y, 0.0f };
+	cbData.LandContest = LandBlendContest();
 	cbData.ShellCullBare = shellTerrainTexture ? 1.0f : 0.0f;
-	cbData.ObjectLiftCap = 0.5f;
 	cbData.ObjectHeightCenter = heightWindowCenter;
 	cbData.ObjectHeightHalfExtent = ObjectRasterHalfExtent();
 

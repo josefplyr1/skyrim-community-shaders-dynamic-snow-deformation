@@ -742,12 +742,10 @@ void SnowDeformation::PrepassSimulation()
 		perFrameData.RefillAmount = refillBank;
 		refillBank = 0.0f;
 	}
-	bloodBurialClock += frameRefill;
 	perFrameData.GameDeltaTime = refillSeconds;
 
 	passClockSeconds += deltaTime;
 	perFrameData.PassClock = static_cast<uint32_t>(std::fmod(passClockSeconds * 2.0, 1024.0));
-	perFrameData.PassGap = 4;
 
 	perFrameData.WindBias = { 0.0f, 0.0f };
 	if (auto* sky = globals::game::sky) {

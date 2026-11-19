@@ -276,13 +276,13 @@ public:
 
 		float2 WindBias;
 		float GameDeltaTime;
-		float padFrame;
+		float BodyPrint;
 
 		DirectX::XMINT4 RingRects[2];
 		uint RingRectCount;
 		uint RingTotalTexels;
-		uint ForceAllDirty;
-		uint padRing;
+		uint PassClock;
+		float AccumulationScale;
 
 		float4 Stamps[kMaxStamps];
 		float4 StampEnds[kMaxStamps];
@@ -294,15 +294,10 @@ public:
 		float2 TerrainWindowOrigin;
 		float TerrainTexelSize;
 		float TerrainDim;
-
-		uint PassClock;
-		uint PassGap;
-		float AccumulationScale;
-		float BodyPrint;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
 	static_assert(offsetof(PerFrame, ContactCenter) == 8288, "PerFrame tail must match the fxc-reflected layout of DeformationUpdateCS");
-	static_assert(offsetof(PerFrame, AccumulationScale) == 8328 && sizeof(PerFrame) == 8336, "PerFrame tail must match the fxc-reflected layout of DeformationUpdateCS");
+	static_assert(offsetof(PerFrame, TerrainWindowOrigin) == 8304 && sizeof(PerFrame) == 8320, "PerFrame tail must match the fxc-reflected layout of DeformationUpdateCS");
 
 	static constexpr float kTrenchWallSharpness = 66.0f;
 
@@ -368,9 +363,6 @@ public:
 	static constexpr UINT kBodyReachSlot = 56;
 	static constexpr UINT kTerrainWetSlot = 58;
 
-	Texture2D* bloodMapTexture = nullptr;
-	Texture2D* bloodClockTexture = nullptr;
-	float bloodBurialClock = 0.0f;
 	static constexpr float kRefillStep = 1.0f / 1024.0f;
 	float refillBank = 0.0f;
 
@@ -598,45 +590,44 @@ public:
 
 		float EnableGlints;
 		float HasSnowHeight;
-		float SnowReliefDepth;
 		float TrenchDetailRelief;
+		float TrenchDetailShadow;
 
-		float ObjectLiftCap;
-		float ObjectHeightHalfExtent;
 		float2 ObjectHeightCenter;
+		float ObjectHeightHalfExtent;
+		float BermBakeActive;
 
 		float CrispShadows;
 		float ScreenSpaceShadowsActive;
 		float PointLightsActive;
 		float SkylightingActive;
 
-		float TrenchDetailShadow;
+		float2 SunCascadeSlices;
+		float2 LandContest;
+
+		float3 SnowParallax;
 		float SeamRampInv;
-		float BermBakeActive;
-		float pad0;
 
 		float4 SeamBounds;
 
 		float4 ExclusionFieldWindow;
 
-		float4 SnowParallax;
-
-		float4 BorderStyle;
-		float4 CompactLook;
-		float4 RimStyle;
-
 		float4 UndulationFieldWindow;
 
 		DirectX::XMINT2 DeformMapOrigin;
 		DirectX::XMINT2 ShellFlags;
+
 		float4 FineWindow;
-		float4 TrampleStyle;
 		float4 TessScreen;
 		float4 FieldDims;
+
+		float AccumulationDepthScale;
+		float BodyPrint;
+		float pad0[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
-	static_assert(offsetof(ShellCB, TrampleStyle) == 592, "ShellCB tail must match the fxc-reflected layout of SnowShell.hlsl");
-	static_assert(sizeof(ShellCB) == 640, "ShellCB tail must match the fxc-reflected layout of SnowShell.hlsl");
+	static_assert(offsetof(ShellCB, AccumulationDepthScale) == 576, "ShellCB tail must match the fxc-reflected layout of SnowShell.hlsl");
+	static_assert(sizeof(ShellCB) == 592, "ShellCB tail must match the fxc-reflected layout of SnowShell.hlsl");
 
 	struct PointShadowLightData
 	{
@@ -1084,11 +1075,11 @@ public:
 	{
 		DirectX::XMINT2 ScrollDelta;
 		uint ClearAll;
-		uint DeadGhostTiles;
+		uint pad0;
 
 		float2 HeightWindowCenter;
 		float HeightHalfExtent;
-		float GhostDecay;
+		float pad1;
 
 		float2 TerrainWindowOrigin;
 		float TerrainTexelSize;

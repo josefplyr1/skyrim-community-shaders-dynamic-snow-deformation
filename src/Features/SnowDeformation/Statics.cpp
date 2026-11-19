@@ -1088,8 +1088,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.TerrainWindowOrigin = { shellWindowCellX * shellCellSize, shellWindowCellY * shellCellSize };
 	processData.TerrainTexelSize = kShellVertexSpacing;
 	processData.TerrainDim = kShellWindowDim;
-	processData.GhostDecay = 0.5f;
-	processData.DeadGhostTiles = 1u;
 	heightProcessCB->Update(processData);
 	heightWindowCenter = newCenter;
 	heightMapValid = true;

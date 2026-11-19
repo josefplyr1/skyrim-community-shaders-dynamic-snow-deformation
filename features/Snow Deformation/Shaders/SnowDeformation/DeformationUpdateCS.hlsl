@@ -27,6 +27,8 @@ static const float2 kSlumpAxis[SLUMP_AXES] = {
 #define SLUMP_NOISE_CELL 80.0
 // How fast thin snow between two trails settles.
 static const float kSlumpRate = 0.1;
+// Pass-clock ticks (half seconds) without a body before a texel's next print starts a new pass.
+static const uint kPassGap = 4u;
 
 cbuffer PerFrame : register(b0)
 {
@@ -35,8 +37,8 @@ cbuffer PerFrame : register(b0)
 	int4 RingRects[2];
 	uint RingRectCount;
 	uint RingTotalTexels;
-	uint ForceAllDirty;
-	uint padRing;
+	uint PassClock;
+	float AccumulationScale;
 
 	float4 Stamps[MAX_STAMPS];
 	float4 StampEnds[MAX_STAMPS];
@@ -48,11 +50,6 @@ cbuffer PerFrame : register(b0)
 	float2 TerrainWindowOrigin;
 	float TerrainTexelSize;
 	float TerrainDim;
-
-	uint PassClock;
-	uint PassGap;
-	float AccumulationScale;
-	float BodyPrint;
 }
 
 Texture2D<float> PreviousDeformation : register(t0);
@@ -304,15 +301,12 @@ bool ScanFinish(uint GIdx, uint2 dims, out uint count)
 	bool need = false;
 	[branch] if (all(DTid.xy < dims))
 	{
-		need = ForceAllDirty != 0;
-		if (!need) {
-			const int halo = (int)ceil((64.0 / max(TexelSize, 1e-3) + 1.0) / 8.0);
-			for (int dy = -halo; dy <= halo && !need; dy++)
-				for (int dx = -halo; dx <= halo && !need; dx++) {
-					const uint2 t = (DTid.xy + uint2(int2(dx, dy) + int2(dims))) & (dims - 1);
-					need = OccupancyIn[t] != 0;
-				}
-		}
+		const int halo = (int)ceil((64.0 / max(TexelSize, 1e-3) + 1.0) / 8.0);
+		for (int dy = -halo; dy <= halo && !need; dy++)
+			for (int dx = -halo; dx <= halo && !need; dx++) {
+				const uint2 t = (DTid.xy + uint2(int2(dx, dy) + int2(dims))) & (dims - 1);
+				need = OccupancyIn[t] != 0;
+			}
 	}
 	[branch] if (need)
 	{
@@ -335,7 +329,7 @@ groupshared uint gSnapRows[SNAPSHOT_SIDE * 8];
 	uint2 dims;
 	OccupancyIn.GetDimensions(dims.x, dims.y);
 	const uint apron = 2u * (uint)ceil((64.0 / max(TexelSize, 1e-3) + 1.0) / 8.0);
-	const bool everything = ForceAllDirty != 0 || apron > SNAPSHOT_MAX_APRON;
+	const bool everything = apron > SNAPSHOT_MAX_APRON;
 	const uint side = 8u + 2u * apron;
 	[branch] if (!everything)
 	{
@@ -393,15 +387,12 @@ groupshared uint gSnapRows[SNAPSHOT_SIDE * 8];
 	bool need = false;
 	[branch] if (all(DTid.xy < dims))
 	{
-		need = ForceAllDirty != 0;
-		if (!need) {
-			const int halo = (int)ceil((40.0 * kBermReach / max(TexelSize, 1e-3) + 2.0) / 8.0);
-			for (int dy = -halo; dy <= halo && !need; dy++)
-				for (int dx = -halo; dx <= halo && !need; dx++) {
-					const uint2 t = (DTid.xy + uint2(int2(dx, dy) + int2(dims))) & (dims - 1);
-					need = BermDirtyIn[t] != 0;
-				}
-		}
+		const int halo = (int)ceil((40.0 * kBermReach / max(TexelSize, 1e-3) + 2.0) / 8.0);
+		for (int dy = -halo; dy <= halo && !need; dy++)
+			for (int dx = -halo; dx <= halo && !need; dx++) {
+				const uint2 t = (DTid.xy + uint2(int2(dx, dy) + int2(dims))) & (dims - 1);
+				need = BermDirtyIn[t] != 0;
+			}
 	}
 	[branch] if (need)
 	{
@@ -536,7 +527,7 @@ bool StampTexel(uint2 phys)
 	{
 		const uint state = PassState[phys];
 		float passStart = float(state & 63u) / 63.0;
-		[flatten] if (((PassClock - (state >> 6)) & 1023u) > PassGap || passStart > deformation + 1.0 / 63.0)
+		[flatten] if (((PassClock - (state >> 6)) & 1023u) > kPassGap || passStart > deformation + 1.0 / 63.0)
 			passStart = floor(saturate(deformation) * 63.0) / 63.0;
 		carve = max(carve, passStart + BodyPrint * max(bodyReach - passStart, 0.0));
 		PassState[phys] = ((PassClock & 1023u) << 6) | uint(passStart * 63.0 + 0.5);

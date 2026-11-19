@@ -135,8 +135,7 @@ bool SnowDeformation::UpdateMarchCaches(const ShellCB& a_cb)
 			key *= 1099511628211ull;
 		}
 	};
-	const float keyFloats[] = { a_cb.DeformInvWorldSize, a_cb.BermBakeActive, a_cb.ObjectLiftCap > 0.0f ? 1.0f : 0.0f,
-		a_cb.ExclusionFieldWindow.w, a_cb.FineWindow.z, a_cb.ObjectHeightHalfExtent,
+	const float keyFloats[] = { a_cb.DeformInvWorldSize, a_cb.BermBakeActive, a_cb.ExclusionFieldWindow.w, a_cb.FineWindow.z, a_cb.ObjectHeightHalfExtent,
 		a_cb.FieldDims.x, a_cb.FieldDims.y, a_cb.FieldDims.z, a_cb.FieldDims.w };
 	mix(keyFloats, sizeof(keyFloats));
 	mix(&dim, sizeof(dim));
