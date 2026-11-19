@@ -111,47 +111,22 @@ namespace SnowLighting
 	static const float4 kShellRMAOSDefault = float4(0.6, 0.0, 1.0, 0.028);
 
 #if defined(LANDSCAPE) || ((defined(LODLANDSCAPE) || defined(LODLANDNOISE) || defined(LODOBJECTS) || defined(LODOBJECTSHD)) && !defined(WORLD_MAP) && !defined(TRUE_PBR))
-	struct SnowSetTaps
-	{
-		float2 uv0, uv1, uv2;
-		float3 weights;
-		float2 dx, dy;
-	};
+#	include "SnowDeformation/SnowTaps.hlsli"
 
-	float2 SnowSetHash(float2 cell)
-	{
-		float3 p3 = frac(float3(cell.x, cell.y, cell.x) * float3(0.1031, 0.1030, 0.0973));
-		p3 += dot(p3, p3.yzx + 33.33);
-		return frac(float2((p3.x + p3.y) * p3.z, (p3.x + p3.z) * p3.y));
-	}
-
-	SnowSetTaps SnowSetTapsAt(float2 worldRelXY, float2 worldXY)
+	SnowTaps SnowSetTapsAt(float2 worldRelXY, float2 worldXY)
 	{
 		float2 uv = frac(FrameBuffer::CameraPosAdjust.xy / SnowDeformation::SnowUVTile) + worldRelXY / SnowDeformation::SnowUVTile;
-		SnowSetTaps t;
-		t.dx = ddx(uv);
-		t.dy = ddy(uv);
-		float2 lattice = mul(float2x2(1.0, -0.57735027, 0.0, 1.15470054), worldXY * (0.6 / 256.0));
-		float2 cellBase = floor(lattice);
-		float2 f = frac(lattice);
-		bool upper = f.x + f.y >= 1.0;
-		float2 v0 = cellBase + (upper ? float2(1.0, 1.0) : float2(0.0, 0.0));
-		float2 v1 = cellBase + (upper ? float2(0.0, 1.0) : float2(1.0, 0.0));
-		float2 v2 = cellBase + (upper ? float2(1.0, 0.0) : float2(0.0, 1.0));
-		float3 bary = upper ? float3(f.x + f.y - 1.0, 1.0 - f.x, 1.0 - f.y) : float3(1.0 - f.x - f.y, f.x, f.y);
-		bary = pow(bary, 4.0);
-		bary /= dot(bary, 1.0);
-		t.weights = bary;
-		t.uv0 = uv + SnowSetHash(v0);
-		t.uv1 = uv + SnowSetHash(v1);
-		t.uv2 = uv + SnowSetHash(v2);
+		SnowTaps t;
+		t.duvdx = ddx(uv);
+		t.duvdy = ddy(uv);
+		SNOW_TAPS_FILL(t, uv, worldXY);
 		return t;
 	}
 
-	float4 SnowSetSample(Texture2D<float4> tex, SnowSetTaps t)
+	float4 SnowSetSample(Texture2D<float4> tex, SnowTaps t)
 	{
-		return t.weights.x * tex.SampleGrad(SampColorSampler, t.uv0, t.dx, t.dy) + t.weights.y * tex.SampleGrad(SampColorSampler, t.uv1, t.dx, t.dy) +
-		       t.weights.z * tex.SampleGrad(SampColorSampler, t.uv2, t.dx, t.dy);
+		return t.weights.x * tex.SampleGrad(SampColorSampler, t.uv0, t.duvdx, t.duvdy) + t.weights.y * tex.SampleGrad(SampColorSampler, t.uv1, t.duvdx, t.duvdy) +
+		       t.weights.z * tex.SampleGrad(SampColorSampler, t.uv2, t.duvdx, t.duvdy);
 	}
 #endif
 
@@ -196,7 +171,7 @@ namespace SnowLighting
 		[branch] if ((SharedData::snowDeformationSettings.DebugTerrainOverlay & 256) != 0 && bits != 0)
 		{
 			float2 worldXY = worldRel.xy + FrameBuffer::CameraPosAdjust.xy;
-			const SnowSetTaps taps = SnowSetTapsAt(worldRel.xy, worldXY);
+			const SnowTaps taps = SnowSetTapsAt(worldRel.xy, worldXY);
 
 			float3 a = SnowSetSample(SnowDeformation::HorizonSnowAlbedo, taps).rgb;
 			float3 shellAlbedo = SnowColor::SetAlbedo(a, SharedData::snowDeformationSettings.SnowIsLinear > 0.5);
@@ -275,7 +250,7 @@ namespace SnowLighting
 #	else
 			float lodReplaceW = lodSnowScore * lodReplaceT * smoothstep(0.35, 0.65, normal.z);
 #	endif
-			const SnowSetTaps taps = SnowSetTapsAt(worldXYRel, worldXYRel + FrameBuffer::CameraPosAdjust.xy);
+			const SnowTaps taps = SnowSetTapsAt(worldXYRel, worldXYRel + FrameBuffer::CameraPosAdjust.xy);
 			[branch] if (lodReplaceW > 0.003)
 			{
 				float3 snowSample = SnowSetSample(SnowDeformation::HorizonSnowAlbedo, taps).rgb;

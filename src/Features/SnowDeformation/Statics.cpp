@@ -437,12 +437,7 @@ struct GeometryRecord
 {
 	const void* material = nullptr;
 	const char* name = nullptr;
-	bool pathBase = false;
-	bool pathNatural = false;
-	bool pathMountain = false;
-	bool pathArchitecture = false;
-	bool pathSnowNamed = false;
-	bool pathGroundSnow = false;
+	SnowPathMatch path;
 	bool iceName = false;
 	bool shard = false;
 	bool bloodTex = false;
@@ -491,13 +486,7 @@ static GeometryRecord& RecordOf(RE::BSGeometry* a_geometry, RE::BSLightingShader
 		auto& nameFacts = NameFactsOf(a_geometry);
 		r.iceName = nameFacts.iceFamily;
 		if (a_material) {
-			const SnowPathMatch& path = ClassifySnowPath(a_material);
-			r.pathBase = path.base;
-			r.pathNatural = path.naturalFeature;
-			r.pathMountain = path.mountain;
-			r.pathArchitecture = path.architecture;
-			r.pathSnowNamed = path.snowNamed;
-			r.pathGroundSnow = path.groundSnow;
+			r.path = ClassifySnowPath(a_material);
 			if (auto diffuse = DiffusePathOf(a_material)) {
 				r.shard = ContainsNoCase(diffuse, "branchpile") || ContainsNoCase(diffuse, "driftwood");
 				r.roadTex = ContainsNoCase(diffuse, "bridge") ? 2 : (ContainsNoCase(diffuse, "road") ? 1 : 0);
@@ -584,9 +573,9 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 	if (!bindSnowSet &&
 		!a_pass->shaderProperty->flags.any(Flag::kLODObjects, Flag::kHDLODObjects, Flag::kTreeAnim) &&
 		(a_shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) == 0) {
-		if (rec.pathSnowNamed && rec.mato != MatoClass::kNotSnow) {
+		if (rec.path.snowNamed && rec.mato != MatoClass::kNotSnow) {
 			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowLODBakedIsSnow);
-			if (rec.pathGroundSnow)
+			if (rec.path.groundSnow)
 				extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowTexturedGround);
 			if (PassBlendsOver(a_pass))
 				extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowTexturedOverlay);
@@ -649,7 +638,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		return;
 	const uint32_t depthBiasMode = globals::game::shadowState->GetRuntimeData().rasterStateDepthBiasMode;
 	const bool decalDepth = depthBiasMode != 0 || flags.any(Flag::kDecal, Flag::kDynamicDecal);
-	const bool snowTexOverlay = rec.pathSnowNamed && PassBlendsOver(a_pass);
+	const bool snowTexOverlay = rec.path.snowNamed && PassBlendsOver(a_pass);
 
 	{
 		const auto& wb = a_pass->geometry->worldBound;
@@ -660,7 +649,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			bool referenced = OwningRefOf(a_pass->geometry) != nullptr;
 			if (!referenced)
 				referenced = GeometryBelongsToLoadedReference(a_pass->geometry);
-			const bool iceSheet = rec.pathNatural;
+			const bool iceSheet = rec.path.naturalFeature;
 			if (!referenced && !iceSheet) {
 				SampleLODDecision(a_pass->geometry, wb.radius, true, false);
 				return;
@@ -675,7 +664,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			return;
 
 		const auto& wbCenter = a_pass->geometry->worldBound.center;
-		bool mountainFeature = rec.pathMountain || nameFacts.mountainCliff;
+		bool mountainFeature = rec.path.mountain || nameFacts.mountainCliff;
 		if (mountainFeature) {
 			const uint32_t depthVersion = snowDepthVersion.load(std::memory_order_acquire);
 			if (rec.depthVersion != depthVersion || rec.depthX != wbCenter.x || rec.depthY != wbCenter.y) {
@@ -686,9 +675,9 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			}
 			mountainFeature = rec.depth > 0.5f;
 		}
-		const bool naturalFeature = rec.pathNatural || rec.iceName || mountainFeature;
-		const bool snowNamedCapture = rec.pathSnowNamed && !snowTexOverlay;
-		if (!(rec.pathBase || naturalFeature || snowNamedCapture || rec.roadLayer)) {
+		const bool naturalFeature = rec.path.naturalFeature || rec.iceName || mountainFeature;
+		const bool snowNamedCapture = rec.path.snowNamed && !snowTexOverlay;
+		if (!(rec.path.base || naturalFeature || snowNamedCapture || rec.roadLayer)) {
 			return;
 		}
 	}
@@ -698,11 +687,11 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	}
 	auto* alphaProperty = a_pass->geometry->GetGeometryRuntimeData().alphaProperty.get();
 	const bool alphaTested = alphaProperty && alphaProperty->GetAlphaTesting();
-	if (!decalDepth && !rec.pathArchitecture && alphaTested && !rec.roadLayer) {
+	if (!decalDepth && !rec.path.architecture && alphaTested && !rec.roadLayer) {
 		return;
 	}
 
-	const bool fadeExempt = rec.pathNatural || rec.iceName;
+	const bool fadeExempt = rec.path.naturalFeature || rec.iceName;
 	const bool fullCoat = nameFacts.drift;
 	const bool bridge = nameFacts.bridge || rec.roadTex == 2;
 	bool road = !bridge && nameFacts.road && (rec.landscapeTex || rec.pavingTex);

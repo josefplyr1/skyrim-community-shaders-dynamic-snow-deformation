@@ -197,14 +197,6 @@ namespace
 		uint64_t vertexDesc = 0;
 	};
 
-	struct LssShaders
-	{
-		winrt::com_ptr<ID3D11VertexShader> vs;
-		winrt::com_ptr<ID3D11HullShader> hs;
-		winrt::com_ptr<ID3D11DomainShader> ds;
-		double compileMs = 0.0;
-	};
-
 	struct LsExclCounts
 	{
 		uint32_t draws = 0;
@@ -268,8 +260,8 @@ namespace
 		bool capturePending = false;
 		LsCapture pendingCapture;
 		int shadeState = 0;
-		std::future<LssShaders> shadePending;
-		LssShaders shade;
+		std::future<LsShaders> shadePending;
+		LsShaders shade;
 		LsShadeCounts shadeFrame;
 		LsShadeCounts shadeLast;
 		uint64_t shadeFallbacks = 0;
@@ -303,9 +295,9 @@ namespace
 		return out;
 	}
 
-	LssShaders LssCompile()
+	LsShaders LssCompile()
 	{
-		LssShaders out;
+		LsShaders out;
 		const auto t0 = std::chrono::steady_clock::now();
 		const wchar_t* path = L"Data\\Shaders\\SnowDeformation\\LandscapeSnowShell.hlsl";
 		std::vector<std::pair<const char*, const char*>> defs;

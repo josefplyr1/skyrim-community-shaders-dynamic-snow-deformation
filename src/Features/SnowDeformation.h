@@ -1373,25 +1373,6 @@ public:
 	static constexpr float kLandRecolorLumLo = 0.48f;
 	/** @brief The recolor runs this frame: the ground snow draws here and the snow set is loaded. */
 	bool LandRecolorActive() const { return settings.EnableSnowDeformation && !GroundShellsSuspended() && shellSnowDiffuseSRV != nullptr; }
-	static constexpr uint32_t kTrenchMarkSettleFrames = 60;
-	static constexpr uint32_t kTrenchMarkRefreshFrames = 600;
-	static constexpr float kTrenchMarkTolTexels = 2.0f;
-	struct TrenchStampAnchor
-	{
-		float4 s;
-		float2 e;
-		uint32_t age;
-	};
-	std::vector<TrenchStampAnchor> trenchStampAnchors;
-	std::vector<TrenchStampAnchor> trenchStampAnchorsNext;
-	std::vector<uint8_t> trenchStampAnchorClaimed;
-	struct TrenchRectAnchor
-	{
-		float minX, minY, maxX, maxY;
-		uint32_t age;
-	};
-	std::unordered_map<uint32_t, TrenchRectAnchor> trenchRectAnchors;
-	std::unordered_map<uint32_t, TrenchRectAnchor> trenchRectAnchorsNext;
 
 protected:
 	void GatherStamps(PerFrame& perFrameData);
