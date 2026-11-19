@@ -310,6 +310,7 @@ namespace SnowLighting
 			snowMaterial.F0 = 0.028;
 			snowMaterial.AO = 1.0;
 			DirectContext snowContext = dirLightContext;
+			snowMaterial.DirectSpecularEnergyCompensation = BRDF::GGXEnergyCompensation(snowMaterial.Roughness, PBR::GetDirectSpecularNdotV(dot(snowContext.worldNormal, snowContext.viewDir)), snowMaterial.F0);
 			snowContext.lightColor *= Color::PBRLightingCompensation;
 			DirectLightingOutput snowLit;
 			PBR::GetDirectLightInput(snowLit, snowContext, snowMaterial, float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1), 0.0.xx);
@@ -457,6 +458,7 @@ namespace SnowLighting
 			snowMaterial.F0 = s.projRMAOS.w;
 			snowMaterial.AO = s.projRMAOS.z;
 			DirectContext snowContext = dirLightContext;
+			snowMaterial.DirectSpecularEnergyCompensation = BRDF::GGXEnergyCompensation(snowMaterial.Roughness, PBR::GetDirectSpecularNdotV(dot(snowContext.worldNormal, snowContext.viewDir)), snowMaterial.F0);
 			snowContext.lightColor *= Color::PBRLightingCompensation;
 			DirectLightingOutput snowLit;
 			PBR::GetDirectLightInput(snowLit, snowContext, snowMaterial, float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1), 0.0.xx);

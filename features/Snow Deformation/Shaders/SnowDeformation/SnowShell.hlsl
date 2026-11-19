@@ -1,6 +1,7 @@
 #include "Common/BRDF.hlsli"
 #include "Common/Color.hlsli"
 #include "Common/GBuffer.hlsli"
+#include "Common/PreExposure.hlsli"
 #include "Common/Random.hlsli"
 #include "Common/SharedData.hlsli"
 #include "SnowDeformation/SnowColor.hlsli"
@@ -1102,7 +1103,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		glintsLit = SnowLights::ClusterLightCount(glintClusterUV, glintViewZ) > 0;
 	}
 	const float glintsHere = glintsLit ? EnableGlints * glintsLeft : 0.0;
-	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, kSnowAlbedo, snowRoughness, snowF0, snowAO,
+	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, V, kSnowAlbedo, snowRoughness, snowF0, snowAO,
 		SnowGlintParams, glintsHere, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
 	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, shadePos, ShellCameraPosAdjust.xyz, sunShadow,
 		glintUV, glintDuvdx, glintDuvdy, float4(0.0, 0.0, 0.0, 0.0));
@@ -1134,11 +1135,11 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	float stochasticBlend = (screenNoise * screenNoise) < alpha ? 1.0 : 0.0;
 
 	PS_OUTPUT psout;
-	psout.Diffuse = float4(preLit, alpha);
+	psout.Diffuse = float4(PreExposure::Encode(preLit), alpha);
 	psout.MotionVectors = float4(motionVector, 0.0, alpha);
 	psout.NormalGlossiness = float4(GBuffer::EncodeNormal(viewNormal), 1.0 - snowRoughness, stochasticBlend);
 	psout.Albedo = float4(diffuseLobe, alpha);
-	psout.Specular = float4(directSpecular, alpha);
+	psout.Specular = float4(PreExposure::Encode(directSpecular), alpha);
 	psout.Reflectance = float4(specularLobe, alpha);
 	psout.Masks = float4(0.0, 0.0, Color::RGBToYCoCg(ambientPart).x, alpha);
 	psout.Masks2 = float4(1.0 - landVertexAO, 0.0, 0.0, alpha);
