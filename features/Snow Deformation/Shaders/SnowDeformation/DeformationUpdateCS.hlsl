@@ -36,7 +36,7 @@ cbuffer PerFrame : register(b0)
 	uint RingRectCount;
 	uint RingTotalTexels;
 	uint ForceAllDirty;
-	float padTrackRebase;
+	uint padRing;
 
 	float4 Stamps[MAX_STAMPS];
 	float4 StampEnds[MAX_STAMPS];
@@ -44,19 +44,15 @@ cbuffer PerFrame : register(b0)
 	float2 ContactCenter;
 	float ContactHalfExtent;
 	float ContactDim;
+
 	float2 TerrainWindowOrigin;
 	float TerrainTexelSize;
 	float TerrainDim;
-	float2 ViewCenter;
-	float ViewHalf;
-	float BodyPrint;
-	float4 RoadRasterPad;
+
 	uint PassClock;
 	uint PassGap;
-	uint2 PassPad;
-	float2 padUndulation;
 	float AccumulationScale;
-	float DrawnPad;
+	float BodyPrint;
 }
 
 Texture2D<float> PreviousDeformation : register(t0);

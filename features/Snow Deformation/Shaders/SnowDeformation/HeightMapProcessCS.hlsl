@@ -1,20 +1,6 @@
 cbuffer HeightProcessCB : register(b0)
 {
-	int2 ScrollDelta;
-	uint ClearAll;
-	uint padConeStep;
-
-	float2 HeightWindowCenter;
-	float HeightHalfExtent;
-	float padSlopePerUnit;
-
-	float2 TerrainWindowOrigin;
-	float TerrainTexelSize;
-	uint TerrainDim;
-
-	float GhostDecay;
-	uint DeadGhostTiles;
-	float2 padGhost;
+#include "SnowDeformation/HeightProcessFields.hlsli"
 }
 
 #define SHELTER_MELT 0.9

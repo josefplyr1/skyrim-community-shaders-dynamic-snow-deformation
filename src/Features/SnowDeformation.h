@@ -271,26 +271,18 @@ public:
 
 		float TexelSize;
 		uint StampCount;
-		float RefillAmount;
-		uint ClearMap;
-
 		float StampFalloffStart;
-		float padBermReach;
+		float RefillAmount;
+
 		float2 WindBias;
-
-		float DeltaTime;
-		float padMelt[3];
-
-		uint FramePad;
 		float GameDeltaTime;
-		uint DebugActivityView;
-		float padAgeingClock;
+		float padFrame;
 
 		DirectX::XMINT4 RingRects[2];
 		uint RingRectCount;
 		uint RingTotalTexels;
 		uint ForceAllDirty;
-		float padTrackRebase;
+		uint padRing;
 
 		float4 Stamps[kMaxStamps];
 		float4 StampEnds[kMaxStamps];
@@ -298,23 +290,19 @@ public:
 		float2 ContactCenter;
 		float ContactHalfExtent;
 		float ContactDim;
+
 		float2 TerrainWindowOrigin;
 		float TerrainTexelSize;
 		float TerrainDim;
-		float2 ViewCenter;
-		float ViewHalf;
-		float BodyPrint;
-		float RoadRasterPad[4];
+
 		uint PassClock;
 		uint PassGap;
-		uint PassPad[2];
-		float padUndulation[2];
 		float AccumulationScale;
-		float DrawnPad;
+		float BodyPrint;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
-	static_assert(offsetof(PerFrame, ContactCenter) == 8320, "PerFrame tail must match the fxc-reflected layout of DeformationUpdateCS");
-	static_assert(offsetof(PerFrame, AccumulationScale) == 8408 && sizeof(PerFrame) == 8416, "PerFrame tail must match the fxc-reflected layout of DeformationUpdateCS");
+	static_assert(offsetof(PerFrame, ContactCenter) == 8288, "PerFrame tail must match the fxc-reflected layout of DeformationUpdateCS");
+	static_assert(offsetof(PerFrame, AccumulationScale) == 8328 && sizeof(PerFrame) == 8336, "PerFrame tail must match the fxc-reflected layout of DeformationUpdateCS");
 
 	static constexpr float kTrenchWallSharpness = 66.0f;
 
@@ -593,64 +581,39 @@ public:
 		float2 GridToDeformOffset;
 
 		float WarpedHalfSpan;
-		uint LayoutKeeper6;
 		uint TerrainDim;
-		uint LayoutKeeper15;
-
 		float DeformInvWorldSize;
+		float ShellCullBare;
+
 		uint HasSnowTexture;
 		float SnowTextureIsLinear;
 		float HasSnowNormal;
-
 		float HasSnowRmaos;
+
 		float SnowRoughnessScale;
+		float SnowSpecularLevel;
 		float2 SnowUVOffset;
 
 		float4 SnowGlintParams;
 
-		float SnowSpecularLevel;
 		float EnableGlints;
+		float HasSnowHeight;
+		float SnowReliefDepth;
 		float TrenchDetailRelief;
-		float padTrenchDetailRoughness;
 
-		float LayoutKeeper5;
-		float padTrenchDetailCoverage;
-		float ShellCullBare;
-		float LayoutKeeper11;
-
-		float LayoutKeeper12;
 		float ObjectLiftCap;
+		float ObjectHeightHalfExtent;
 		float2 ObjectHeightCenter;
 
-		float ObjectHeightHalfExtent;
 		float CrispShadows;
 		float ScreenSpaceShadowsActive;
-		float padUndulationAmp;
-
-		float padUndulationScale;
-		float LayoutKeeper13;
 		float PointLightsActive;
 		float SkylightingActive;
 
-		float HasSnowHeight;
-		float SnowReliefDepth;
-		float StaticsDebugView;
-		float padBermHeightAmp;
-
-		float padSpeedSpoil;
-		float LayoutKeeper9;
-		float DebugNoFarPad;
-		float LayoutKeeper4;
-
-		float LayoutKeeper7;
 		float TrenchDetailShadow;
-		float LayoutKeeper3;
-		float LayoutKeeper14;
-
-		float padBermReach;
-		uint LayoutKeeper10;
 		float SeamRampInv;
 		float BermBakeActive;
+		float pad0;
 
 		float4 SeamBounds;
 
@@ -672,8 +635,8 @@ public:
 		float4 FieldDims;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
-	static_assert(offsetof(ShellCB, TrampleStyle) == 672, "ShellCB tail must match the fxc-reflected layout of both shells");
-	static_assert(sizeof(ShellCB) == 720, "ShellCB tail must match the fxc-reflected layout of SnowShell.hlsl");
+	static_assert(offsetof(ShellCB, TrampleStyle) == 592, "ShellCB tail must match the fxc-reflected layout of SnowShell.hlsl");
+	static_assert(sizeof(ShellCB) == 640, "ShellCB tail must match the fxc-reflected layout of SnowShell.hlsl");
 
 	struct PointShadowLightData
 	{
@@ -991,15 +954,15 @@ public:
 	/** @brief Uploads the pending point-shadow table (t38). The table stays empty until mask-time snapshots exist. Implemented in SnowDeformation/Shadows.cpp. */
 	void UpdatePointShadowLights();
 
-	/** @brief Per-object constants for the height, water and contact captures. Layout must match StaticCB in StaticCBFields.hlsli and SnowContactCapture.hlsl. */
+	/** @brief Per-object constants for the height, water and contact captures. Layout must match StaticCBFields.hlsli. */
 	struct alignas(16) StaticsCB
 	{
 		float4 WorldRow0;
 		float4 WorldRow1;
 		float4 WorldRow2;
-		float ObjectsDepth;
 		float2 HeightWindowCenter;
 		float HeightHalfExtent;
+		float pad0;
 	};
 	STATIC_ASSERT_ALIGNAS_16(StaticsCB);
 	static_assert(sizeof(StaticsCB) == 64, "StaticsCB must match the fxc-reflected StaticCB of SnowHeightCapture and SnowContactCapture");
@@ -1116,31 +1079,27 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> heightCombineCS;
 	winrt::com_ptr<ID3D11ComputeShader> heightWaterCoverCS;
 
-	/** @brief Per-dispatch constants for the height-window processing. Layout must match HeightProcessCB in HeightMapProcessCS.hlsl. */
+	/** @brief Per-dispatch constants for the height-window processing and the height capture PS. Layout must match HeightProcessFields.hlsli. */
 	struct alignas(16) HeightProcessCB
 	{
 		DirectX::XMINT2 ScrollDelta;
 		uint ClearAll;
-		uint padConeStep;
+		uint DeadGhostTiles;
 
 		float2 HeightWindowCenter;
 		float HeightHalfExtent;
-		float padSlopePerUnit;
+		float GhostDecay;
 
 		float2 TerrainWindowOrigin;
 		float TerrainTexelSize;
 		uint TerrainDim;
-
-		float GhostDecay;
-		uint DeadGhostTiles;
-		float padGhost[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(HeightProcessCB);
-	static_assert(sizeof(HeightProcessCB) == 64, "HeightProcessCB must match the fxc-reflected layout of HeightMapProcessCS.hlsl");
+	static_assert(sizeof(HeightProcessCB) == 48, "HeightProcessCB must match the fxc-reflected layout of HeightProcessFields.hlsli");
 
 	ConstantBuffer* heightProcessCB = nullptr;
 
-	/** @brief ScrollCS only: the camera clip transform, so the ghost merge can ask whether the surface that wrote a stale texel would still have been submitted this frame. Its own buffer, not a HeightProcessCB growth - that block is prefix-mirrored by the capture PS. Layout must match GhostCB in HeightMapProcessCS.hlsl. */
+	/** @brief ScrollCS only: the camera clip transform, so the ghost merge can ask whether the surface that wrote a stale texel would still have been submitted this frame. Layout must match GhostCB in HeightMapProcessCS.hlsl. */
 	struct alignas(16) HeightGhostCB
 	{
 		Matrix GhostViewProj;

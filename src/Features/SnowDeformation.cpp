@@ -745,7 +745,6 @@ void SnowDeformation::PrepassSimulation()
 	bloodBurialClock += frameRefill;
 	perFrameData.GameDeltaTime = refillSeconds;
 
-	perFrameData.DeltaTime = deltaTime;
 	passClockSeconds += deltaTime;
 	perFrameData.PassClock = static_cast<uint32_t>(std::fmod(passClockSeconds * 2.0, 1024.0));
 	perFrameData.PassGap = 4;
@@ -756,12 +755,12 @@ void SnowDeformation::PrepassSimulation()
 		perFrameData.WindBias = { std::sin(sky->windAngle) * windStrength, std::cos(sky->windAngle) * windStrength };
 	}
 
-	perFrameData.ClearMap = clearRequested;
+	const bool clearMap = clearRequested;
 	clearRequested = false;
 
 	{
 		ArrivalRect arriving[2];
-		const int arrivingCount = ComputeArrivalRects(scroll, perFrameData.ClearMap != 0, arriving);
+		const int arrivingCount = ComputeArrivalRects(scroll, clearMap, arriving);
 		perFrameData.RingRectCount = (uint)arrivingCount;
 		perFrameData.RingTotalTexels = 0;
 		for (int i = 0; i < arrivingCount; i++) {
@@ -826,7 +825,7 @@ void SnowDeformation::PrepassSimulation()
 		scroll.x == 0 && scroll.y == 0 &&
 		stampsQuiet &&
 		perFrameData.RefillAmount <= 0.0f &&
-		perFrameData.ClearMap == 0 &&
+		!clearMap &&
 		perFrameData.ContactDim < 0.5f;
 	const bool mapQuiet = !deformFlagActive && deformFlagSeq > deformLastNonIdleSeq;
 	deformIdleSkipped = inputsIdle && mapQuiet && !tileGridsNeedInit;

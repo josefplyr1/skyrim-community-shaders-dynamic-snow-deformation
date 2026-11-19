@@ -24,64 +24,39 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	float2 GridToDeformOffset;
 
 	float WarpedHalfSpan;
-	uint LayoutKeeper6;
 	uint TerrainDim;
-	uint LayoutKeeper15;
-
 	float DeformInvWorldSize;
+	float ShellCullBare;
+
 	uint HasSnowTexture;
 	float SnowTextureIsLinear;
 	float HasSnowNormal;
-
 	float HasSnowRmaos;
+
 	float SnowRoughnessScale;
+	float SnowSpecularLevel;
 	float2 SnowUVOffset;
 
 	float4 SnowGlintParams;
 
-	float SnowSpecularLevel;
 	float EnableGlints;
+	float HasSnowHeight;
+	float SnowReliefDepth;
 	float TrenchDetailRelief;
-	float padTrenchDetailRoughness;
 
-	float LayoutKeeper5;
-	float padTrenchDetailCoverage;
-	float ShellCullBare;
-	float LayoutKeeper11;
-
-	float LayoutKeeper12;
 	float ObjectLiftCap;
+	float ObjectHeightHalfExtent;
 	float2 ObjectHeightCenter;
 
-	float ObjectHeightHalfExtent;
 	float CrispShadows;
 	float ScreenSpaceShadowsActive;
-	float padUndulationAmp;
-
-	float padUndulationScale;
-	float LayoutKeeper13;
 	float PointLightsActive;
 	float SkylightingActive;
 
-	float HasSnowHeight;
-	float SnowReliefDepth;
-	float StaticsDebugView;
-	float padBermHeightAmp;
-
-	float padSpeedSpoil;
-	float LayoutKeeper9;
-	float DebugNoFarPad;
-	float LayoutKeeper4;
-
-	float LayoutKeeper7;
 	float TrenchDetailShadow;
-	float LayoutKeeper3;
-	float LayoutKeeper14;
-
-	float padBermReach;
-	uint LayoutKeeper10;
 	float SeamRampInv;
 	float BermBakeActive;
+	float pad0;
 
 	float4 SeamBounds;
 

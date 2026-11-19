@@ -967,7 +967,6 @@ void SnowDeformation::DrawShell()
 	const auto& dynRes = globals::game::frameBufferCached.GetDynamicResolutionParams1();
 	const float2 landContest = LandBlendContest();
 	cbData.CompactLook = { 0.0f, landContest.x, landContest.y, 0.0f };
-	cbData.DebugNoFarPad = 0.0f;
 	cbData.ShellCullBare = shellTerrainTexture ? 1.0f : 0.0f;
 	cbData.ObjectLiftCap = 0.5f;
 	cbData.ObjectHeightCenter = heightWindowCenter;
