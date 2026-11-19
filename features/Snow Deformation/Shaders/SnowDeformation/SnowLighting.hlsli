@@ -200,17 +200,6 @@ namespace SnowLighting
 
 			float3 a = SnowSetSample(SnowDeformation::HorizonSnowAlbedo, taps).rgb;
 			float3 shellAlbedo = SnowColor::SetAlbedo(a, SharedData::snowDeformationSettings.SnowIsLinear > 0.5);
-			const float ice = SharedData::snowDeformationSettings.LandIce;
-			float glaze = 0.0;
-			[branch] if (ice > 0.001)
-			{
-				const float pressed = smoothstep(0.1, 0.5, SnowDeformation::GetDeformation(worldXY));
-				float since = 0.0;
-				[branch] if (pressed > 0.001)
-					since = max(ice - SnowIce::AtCut(SnowDeformation::GetCutDate(worldXY)).y, 0.0);
-				glaze = max(pressed * since, 0.1 * ice);
-			}
-			shellAlbedo *= lerp(1.0, float3(0.93, 0.955, 0.985), glaze);
 #	if defined(TRUE_PBR)
 			s.landSnowRaw = Color::PBRMaterialToLinear(shellAlbedo);
 #	else
@@ -226,7 +215,6 @@ namespace SnowLighting
 			s.landSnowRMAOS = kShellRMAOSDefault;
 			[branch] if (ShellHasRMAOS())
 				s.landSnowRMAOS = ShellRMAOS(SnowSetSample(SnowDeformation::HorizonSnowRmaos, taps));
-			s.landSnowRMAOS.x *= 1.0 - glaze * 0.8;
 			s.landSnowBits = bits;
 			s.landRecolor = true;
 		}
@@ -278,7 +266,7 @@ namespace SnowLighting
 #	endif
 		[branch] if (snowLodOn)
 		{
-			float lodSnowScore = SnowDeformation::ClassifyLODSnow(rawBaseColor);
+			float lodSnowScore = ClassifyLODSnow(rawBaseColor);
 			float lodReplaceT = saturate((length(worldXYRel) - SharedData::snowDeformationSettings.LODReplaceStart) * SharedData::snowDeformationSettings.LODReplaceFadeInv);
 #	if defined(LODOBJECTS) || defined(LODOBJECTSHD)
 			float lodReplaceW = lodSnowScore * lodReplaceT * smoothstep(0.0, 0.3, normal.z);

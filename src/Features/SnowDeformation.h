@@ -212,8 +212,6 @@ public:
 	static constexpr float kSpeedSpoilSize = 0.25f;
 	static constexpr float kObjectRasterReachM = 100.0f;
 
-	static constexpr uint32_t kIceHistoryBins = 128;
-
 	/** @brief GPU-side settings, appended to the shared FeatureData cbuffer (b6). Layout must match SnowDeformationSettings in SharedData.hlsli. */
 	struct alignas(16) SettingsGPU
 	{
@@ -244,7 +242,7 @@ public:
 		float WaterWindowTexel;
 		float WaterWindowDim;
 
-		float LandIce;
+		float padLandIce;
 		float padProjSnowNormalEnable;
 		float SnowSpecularLevel;
 		float LandRecolorLumLo;
@@ -252,14 +250,10 @@ public:
 		DirectX::XMINT4 padPrintRect;
 
 		float padParallaxFlatten;
-		float IceClock;
-		float padIceClock[2];
-
-		float4 IceHistory[kIceHistoryBins];
+		float padIceClock[3];
 	};
 	STATIC_ASSERT_ALIGNAS_16(SettingsGPU);
-	static_assert(offsetof(SettingsGPU, IceClock) == 132 && offsetof(SettingsGPU, IceHistory) == 144 && sizeof(SettingsGPU) == 2192,
-		"SettingsGPU must match the fxc-reflected SnowDeformationSettings in SharedData.hlsli");
+	static_assert(sizeof(SettingsGPU) == 144, "SettingsGPU must match the fxc-reflected SnowDeformationSettings in SharedData.hlsli");
 
 	/**
 	 * @brief Returns this frame's GPU settings for the shared FeatureData buffer.
@@ -591,9 +585,6 @@ public:
 	/** @brief kShellTessTargetPx in this frame's render pixels (TessScreen.x): an upscaler's render scale applied. */
 	float ShellTessTargetRenderPx() const;
 
-	static constexpr uint32_t kClimateLUTRows = 3;
-	static constexpr float kClimateLUTStep = 2.0f;
-
 	/** @brief Per-draw constants for the shell pass. Layout must match ShellCB in SnowShell.hlsl. */
 	struct alignas(16) ShellCB
 	{
@@ -692,21 +683,14 @@ public:
 		float4 FineWindow;
 		float4 padSlopeDrape;
 		float4 padDebugSkinDepth;
-		float4 BloodLook;
-		float4 BloodLook2;
-		float4 BloodLook3;
+		float4 padBloodLook[3];
 		float4 TrampleStyle;
 		float4 TessScreen;
 		float4 FieldDims;
-		float4 SnowClimate;
-		float4 SnowClimate2;
-		float4 SnowClimateOverride;
-		float4 SnowClimateLUT[kClimateLUTRows];
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
 	static_assert(offsetof(ShellCB, TrampleStyle) == 800, "ShellCB tail must match the fxc-reflected layout of both shells");
-	static_assert(offsetof(ShellCB, SnowClimate) == 848, "ShellCB tail must match the fxc-reflected layout of SnowShell.hlsl");
-	static_assert(offsetof(ShellCB, SnowClimateLUT) == 896 && sizeof(ShellCB) == 944, "ShellCB tail must match the fxc-reflected layout of SnowShell.hlsl");
+	static_assert(sizeof(ShellCB) == 848, "ShellCB tail must match the fxc-reflected layout of SnowShell.hlsl");
 
 	struct PointShadowLightData
 	{
@@ -1598,38 +1582,15 @@ protected:
 	float GetAccumulationDepthScale() const;
 
 	static constexpr float kAgeingClockStart = 1024.0f;
-	static constexpr float kClimateLapse = 0.0005f;
 	struct SnowClimateState
 	{
-		float temperature = 0.0f;
-		float wetness = 0.0f;
-		float windPacking = 0.0f;
-		float landSnowShare = -1.0f;
-		float rainHeld = 0.0f;
-		std::array<float, kClimateLUTRows> rowWater{};
-		std::array<float, kClimateLUTRows> rowIce{};
-		std::array<std::array<float, kClimateLUTRows>, kIceHistoryBins> iceHistory{};
-		int32_t iceHistoryUnit = -1;
 		float ageingClock = kAgeingClockStart;
 		float ageingRate = 0.0f;
-		double ageingTotal = 0.0;
 		float ageingRebase = 0.0f;
-		float targetTemperature = 0.0f;
-		float termRegion = 0.0f;
-		float termWeather = 0.0f;
-		float termSun = 0.0f;
-		bool primed = false;
-		uint32_t shareFrame = 0;
 	};
 	SnowClimateState snowClimate;
-	float SnowIceShown(uint32_t a_row) const;
-	float SnowIceSinceCut(uint32_t a_row, uint32_t a_units) const;
-	float SnowWetIceStrength() const;
-	static constexpr uint32_t kIceRecord = 'SNIC';
-	static constexpr uint32_t kIceRecordVersion = 2;
 	void TickSnowClimate();
 	void TickSnowAgeing();
-	float LandSnowShareAround(float a_x, float a_y);
 
 	uint32_t stampGatherFrame = UINT32_MAX;
 
@@ -1658,7 +1619,6 @@ protected:
 	static constexpr UINT kHorizonSnowNormalSlot = 23;
 	static constexpr UINT kWaterWindowSlot = 63;
 	static constexpr UINT kHorizonSnowRmaosSlot = 68;
-	static constexpr UINT kLandBermSlot = kBodyReachSlot;
 
 public:
 	/** @brief Applies pending range-setting changes (trench window resize + map clear). Called at Prepass start; the first call applies loaded settings. */

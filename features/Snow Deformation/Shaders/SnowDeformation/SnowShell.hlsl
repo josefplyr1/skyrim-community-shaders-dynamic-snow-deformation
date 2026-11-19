@@ -292,7 +292,6 @@ float TerrainHeightAt(float2 gridLocal)
 
 static const float kLandFilm = 0.5;
 static const float kLandFilmDepth = 1.0;
-static const float kDecalShowDepth = 14.0;
 
 float LandSnowWeight(float2 gridLocal)
 {
@@ -384,12 +383,11 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 		[flatten] if (depth > 0.0)
 		{
 			float deformation = saturate(SampleDeformationSmooth(gridLocal));
-			float4 bermPair = BermFieldPair(gridLocal);
-			float bermD = bermPair.x;
+			float bermD = BermFieldPair(gridLocal).x;
 			float uncarved = depth;
-			depth = CarveProfile(deformation, bermPair.y, uncarved, GridOrigin + gridLocal, TrackCarveLook(TrackAgeOf(bermPair.z)));
+			depth = CarveProfile(deformation, uncarved, GridOrigin + gridLocal);
 #ifndef SNOW_SURFACE_NO_BERM
-			depth += BermShape(bermD) * saturate(1.0 - deformation) * uncarved * kBermHeight * BermDepthGate(uncarved) * TrackBermScale(TrackAgeOf(bermPair.w));
+			depth += BermShape(bermD) * saturate(1.0 - deformation) * uncarved * kBermHeight * BermDepthGate(uncarved);
 #endif
 			depth += UndulationSampled(GridOrigin + gridLocal) * saturate(depth / 8.0);
 		}
@@ -425,7 +423,6 @@ float2 ShellVertexSlope(float2 gridLocal)
 #define SHELL_CAST_VIS(castVis, gridLocal, z, coverage)                                                                               \
 	float3 rawTerrainCast = SampleTerrain(gridLocal);                                                                                 \
 	float castVis = smoothstep(2.0, 5.0, (z) - rawTerrainCast.x) * smoothstep(0.2, 0.5, min((coverage), saturate(rawTerrainCast.z))); \
-	castVis *= 1.0 - smoothstep(0.35, 0.6, SampleMelted(gridLocal));                                                                  \
 	castVis *= 1.0 - smoothstep(2800.0, 4900.0, length((gridLocal) - WarpedHalfSpan));
 
 #ifndef SNOW_SURFACE_ONLY
@@ -742,14 +739,12 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	bool landFilm = false;
 	float landRemaining = 0.0;
 	float landBurial = 0.0;
-	float landMelt = 0.0;
 #		ifndef SNOW_SHELL_DEFERRED
 	[branch] if (coverageAlpha > 0.001)
 	{
-		landRemaining = CarveProfile(pixelCarve, pixelCarve, max(pixelEffDepth, 0.0), GridOrigin + gridLocal, TrackCarveLook(0.0));
+		landRemaining = CarveProfile(pixelCarve, max(pixelEffDepth, 0.0), GridOrigin + gridLocal);
 		landFilm = landRemaining < kLandFilmDepth;
-		landMelt = min(SampleMelted(gridLocal), pixelCarve);
-		landBurial = landMelt > 0.0 ? CarveProfile(landMelt, landMelt, max(pixelEffDepth, 0.0), GridOrigin + gridLocal, TrackCarveLook(0.0)) : max(pixelEffDepth, 0.0);
+		landBurial = max(pixelEffDepth, 0.0);
 	}
 #		endif
 	coverageAlpha *= landFilm ? 1.0 : max(proximityFade, saturate(carveOverride + smoothstep(0.1, 0.4, pixelMelt)));
@@ -767,13 +762,13 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	float landSide = 0.0;
 	[branch] if (coverageAlpha > 0.001 && (landFilm || pixelSnowWeight < 0.998))
 	{
-		landSide = LandSnowSide(landBurial, landMelt);
+		landSide = LandSnowSide(landBurial, 0.0);
 		landContest = landSide < 16.0;
 	}
 #			else
 	[branch] if (coverageAlpha > 0.001 && (landFilm || pixelSnowWeight < 0.998))
 	{
-		[flatten] if (LandSnowOdds(LandMasksCopy.Load(int3(input.Position.xy, 0)).y) + LandSnowSide(landBurial, landMelt) < 0.0)
+		[flatten] if (LandSnowOdds(LandMasksCopy.Load(int3(input.Position.xy, 0)).y) + LandSnowSide(landBurial, 0.0) < 0.0)
 			coverageAlpha = 0.0;
 	}
 #			endif
@@ -802,11 +797,8 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	prepassOut.DepthLE = ShellExportDepthAt(input.Position.z, rawSceneDepth, shellZ, sceneZ, exportEffDepth, pixelCarve, input.WorldPos, input.Position.xy);
 #			ifdef SNOW_PREPASS_EARLY
 	const bool clampPending = prepassOut.DepthLE < input.Position.z;
-	bool markPending = false;
-	[branch] if (landRemaining < kDecalShowDepth)
-		markPending = SampleSpellMark(gridLocal) > 0.0;
 	prepassOut.Pending = 0.0;
-	[branch] if (clampPending || landContest || markPending)
+	[branch] if (clampPending || landContest)
 	{
 		prepassOut.RasterDepth = -input.Position.z;
 		prepassOut.Pending = float4(landSide, (clampPending ? 2.0 : 0.0) + (landContest ? 8.0 : 0.0), 0.0, 0.0);
@@ -822,31 +814,16 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	float2 profileGrad = 0.0;
 	float2 bermGrad = 0.0;
 	float bermCenter = 0.0;
-	float pixelAge = 0.0;
 	[branch] if (!pixelUntouched)
 	{
-		float bermAge = 0.0;
-		[branch] if (TrackAge.y > 0.0)
-		{
-			const float2 dates = BermFieldPair(gridLocal).zw;
-			pixelAge = TrackAgeOf(dates.x);
-			bermAge = TrackAgeOf(dates.y);
-		}
 		const float step = 4.0;
 		float dXP = SampleDeformationSmooth(gridLocal + float2(step, 0.0));
 		float dXN = SampleDeformationSmooth(gridLocal - float2(step, 0.0));
 		float dYP = SampleDeformationSmooth(gridLocal + float2(0.0, step));
 		float dYN = SampleDeformationSmooth(gridLocal - float2(0.0, step));
-		const float3 carveLook = TrackCarveLook(pixelAge);
-		float4 blur = saturate(float4(dXP, dXN, dYP, dYN));
-		[branch] if (CompactLook.w > 0.0 || carveLook.x > 0.0)
-		{
-			blur = float4(BermFieldPair(gridLocal + float2(step, 0.0)).y, BermFieldPair(gridLocal - float2(step, 0.0)).y,
-				BermFieldPair(gridLocal + float2(0.0, step)).y, BermFieldPair(gridLocal - float2(0.0, step)).y);
-		}
 		profileGrad = float2(
-						  CarveProfile(saturate(dXP), blur.x, pixelDepth, GridOrigin + gridLocal + float2(step, 0.0), carveLook) - CarveProfile(saturate(dXN), blur.y, pixelDepth, GridOrigin + gridLocal - float2(step, 0.0), carveLook),
-						  CarveProfile(saturate(dYP), blur.z, pixelDepth, GridOrigin + gridLocal + float2(0.0, step), carveLook) - CarveProfile(saturate(dYN), blur.w, pixelDepth, GridOrigin + gridLocal - float2(0.0, step), carveLook)) /
+						  CarveProfile(saturate(dXP), pixelDepth, GridOrigin + gridLocal + float2(step, 0.0)) - CarveProfile(saturate(dXN), pixelDepth, GridOrigin + gridLocal - float2(step, 0.0)),
+						  CarveProfile(saturate(dYP), pixelDepth, GridOrigin + gridLocal + float2(0.0, step)) - CarveProfile(saturate(dYN), pixelDepth, GridOrigin + gridLocal - float2(0.0, step))) /
 		              (2.0 * step);
 		const float bStep = BermGradStep();
 		float mXP = dXP, mXN = dXN, mYP = dYP, mYN = dYN;
@@ -864,7 +841,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		bermGrad = float2(
 					   BermShape(bermXP) * saturate(1.0 - mXP) - BermShape(bermXN) * saturate(1.0 - mXN),
 					   BermShape(bermYP) * saturate(1.0 - mYP) - BermShape(bermYN) * saturate(1.0 - mYN)) /
-		           (2.0 * bStep) * TrackBermScale(bermAge);
+		           (2.0 * bStep);
 		bermCenter = 0.25 * (bermXP + bermXN + bermYP + bermYN);
 	}
 	float2 macroGrad = -terrainNormal.xy / max(terrainNormal.z, 0.1);
@@ -889,19 +866,17 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 #			if defined(SNOW_NOISE_TABLE)
 	[branch] if (!pixelUntouched && detailFade > 0.0 && TrenchDetailRelief > 0.001)
 	{
-		const float4 detailField = BermFieldPair(gridLocal);
+		const float2 detailField = BermFieldPair(gridLocal).xy;
 		const float detailReach = detailFade;
-		detailMask = TrenchDetailMask(pixelCarve, detailField.xy, kTrenchDetailCoverage) * detailReach;
-		const float2 marks = SampleDetailMarks(gridLocal);
-		detailMask = max(detailMask, TrenchSpoilMask(marks.y) * detailReach);
+		detailMask = TrenchDetailMask(pixelCarve, detailField, kTrenchDetailCoverage) * detailReach;
+		const float spoil = SampleDetailSpoil(gridLocal);
+		detailMask = max(detailMask, TrenchSpoilMask(spoil) * detailReach);
 		[branch] if (detailMask > 0.0)
 		{
-			const float meltWet = max(smoothstep(kSpellMarkStart, 0.15, marks.x), smoothstep(0.1, 0.4, pixelMelt));
-			const float detailAge = lerp(TrackAgeOf(detailField.w), TrackAgeOf(detailField.z), saturate(10.0 * pixelCarve));
-			const float impact = marks.y * TrackDetailImpactScale(detailAge);
-			detailImpact = max(meltWet, impact);
+			const float meltWet = smoothstep(0.1, 0.4, pixelMelt);
+			detailImpact = max(meltWet, spoil);
 			detailRelief = TrenchDetailRelief * detailMask * max(saturate(pixelDepth / 10.0), meltWet) * TrampleDetailScale(worldXYPS, pixelCarve) *
-			               (1.0 + kImpactReliefBoost * impact) * TrackDetailReliefScale(detailAge);
+			               (1.0 + kImpactReliefBoost * spoil);
 			detailTaps = TrenchDetailTapsAt(worldXYPS);
 			detailLod = TrenchDetailLod(gDeferredGridDx, gDeferredGridDy);
 		}
@@ -926,7 +901,6 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	const float3 frameNormalWS = normalize(float3(-detailPlane, 1.0));
 
 	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, shellZ);
-	float scorchRaw = 0.0;
 	float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
 	SnowTaps snowTaps = ComputeSnowTapsNoGrad(snowUV, worldXYPS);
 	snowTaps.duvdx = gDeferredGridDx / kSnowUVTile;
@@ -949,12 +923,11 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	const float2 glintDuvdx = glintSide ? snowTapsSide.duvdx : snowTaps.duvdx;
 	const float2 glintDuvdy = glintSide ? snowTapsSide.duvdy : snowTaps.duvdy;
 
-	const float iceParallax = SnowIceParallax(pixelCarve, pixelMelt, input.WorldPos.z + ShellCameraPosAdjust.z, gridLocal, true);
 	[branch] if (HasSnowHeight > 0.5 && SnowParallax.z > 0.001 && bumpFade > 0.001)
 	{
 		float3x3 snowTbn = float3x3(bumpT, bumpB, frameNormalWS);
 		DisplacementParams pomParams = SnowDisplacementParams();
-		pomParams.HeightScale *= SnowParallax.z * iceParallax;
+		pomParams.HeightScale *= SnowParallax.z;
 		float2 pomOffset = SnowParallaxOffset(snowTaps, snowUV, V, snowTbn, shellZ, snowHeightMip, screenNoise, pomParams);
 		pomOffset *= 1.0 - smoothstep(0.15, 0.35, 1.0 - abs(frameNormalWS.z));
 		snowUV += pomOffset;
@@ -975,7 +948,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		kSnowAlbedo = SampleSnowPlanar(SnowDiffuse, snowTaps, snowTapsSide, snowSteepness).rgb;
 		kSnowAlbedo = SnowColor::SetAlbedo(kSnowAlbedo, SnowTextureIsLinear != 0.0);
 	}
-	const float2 wetLook = SnowWetPrint(kSnowAlbedo, pixelCarve, pixelMelt, pixelDepth, input.WorldPos.z + ShellCameraPosAdjust.z, gridLocal, true);
+	const float wetRoughCut = SnowWetPrint(kSnowAlbedo, pixelCarve, pixelMelt, pixelDepth);
 	float kSnowRoughness = 0.6;
 	float3 kSnowF0 = float3(0.028, 0.028, 0.028);
 
@@ -985,8 +958,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	SNOW_RMAOS(snowRoughness, snowF0, snowAO, snowTaps, snowTapsSide, snowSteepness)
 	snowRoughness = clamp(snowRoughness, 0.05, 1.0);
 
-	snowRoughness *= 1.0 - wetLook.x;
-	const float glintsLeft = wetLook.y;
+	snowRoughness *= 1.0 - wetRoughCut;
 
 	float3 L = SharedData::DirLightDirection.xyz;
 	float satNdotL = saturate(dot(normalWS, L));
@@ -1081,13 +1053,13 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 			lightUV, lightUVSide, snowHeightMip, snowHeightMipSide,
 			SnowParallaxQuality(shellZ), screenNoise, SnowDisplacementParams());
 
-		float parallaxShadow = 1.0 - saturate(occlusion * SnowParallax.y * iceParallax);
+		float parallaxShadow = 1.0 - saturate(occlusion * SnowParallax.y);
 		sunShadow *= lerp(1.0, parallaxShadow, bumpFade * (1.0 - snowSteepness));
 	}
 #			if defined(SNOW_NOISE_TABLE)
 	[branch] if (detailRelief > 0.05 && TrenchDetailShadow > 0.001 && SnowParallax.y > 0.001 && sunShadow > 0.01 && satNdotL > 0.001)
-		sunShadow *= lerp(1.0, TrenchDetailSunShadow(detailTaps, detailHitH, L, detailPlane, float3(detailRelief, detailLod, SnowParallax.y * iceParallax), detailImpact, screenNoise),
-			min(TrenchDetailShadow, SnowParallax.z * iceParallax));
+		sunShadow *= lerp(1.0, TrenchDetailSunShadow(detailTaps, detailHitH, L, detailPlane, float3(detailRelief, detailLod, SnowParallax.y), detailImpact, screenNoise),
+			min(TrenchDetailShadow, SnowParallax.z));
 #			endif
 
 	float3 sunLight = SharedData::DirLightColor.xyz * sunShadow;
@@ -1102,7 +1074,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		ShellClusterCoords(input.WorldPos, glintViewZ, glintClusterUV);
 		glintsLit = SnowLights::ClusterLightCount(glintClusterUV, glintViewZ) > 0;
 	}
-	const float glintsHere = glintsLit ? EnableGlints * glintsLeft : 0.0;
+	const float glintsHere = glintsLit ? EnableGlints : 0.0;
 	SnowMaterialCtx snowMtl = SnowBuildMaterial(normalWS, V, kSnowAlbedo, snowRoughness, snowF0, snowAO,
 		SnowGlintParams, glintsHere, glintUV, glintDuvdx, glintDuvdy, input.Position.xy);
 	SnowSunLighting sunLit = SnowEvaluateSunPBR(snowMtl, normalWS, V, shadePos, ShellCameraPosAdjust.xyz, sunShadow,
@@ -1209,9 +1181,9 @@ float MarchTapHeight(float2 a_gridLocal)
 	float depth = max(st.y, 0.0);
 	depth = lerp(depth, min(depth, kFireMeltFloor), saturate(SampleExclusionMask(GridOrigin + gridLocal).y));
 	const float deform = SampleDeformationFast(gridLocal);
-	const float4 berm = BermBakeActive > 0.5 ? BermFieldBaked(gridLocal) : float4(0.0, deform, TrackAge.x, TrackAge.x);
-	depth = CarveProfileNoTeeth(deform, berm.y, depth, TrackCarveLook(TrackAgeOf(berm.z))) +
-	        BermShape(berm.x) * saturate(1.0 - deform) * depth * kBermHeight * BermDepthGate(depth) * TrackBermScale(TrackAgeOf(berm.w));
+	const float bermD = BermBakeActive > 0.5 ? BermFieldBaked(gridLocal).x : 0.0;
+	depth = CarveProfileNoTeeth(deform, depth) +
+	        BermShape(bermD) * saturate(1.0 - deform) * depth * kBermHeight * BermDepthGate(depth);
 	return st.x + depth + Undulation(GridOrigin + gridLocal) * saturate(depth / 8.0);
 }
 

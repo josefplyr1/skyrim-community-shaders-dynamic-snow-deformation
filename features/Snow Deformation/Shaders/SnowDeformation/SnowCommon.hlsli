@@ -41,6 +41,12 @@
 // How readily a far LOD texel counts as snow: 0 only bright white, 1 pale gray rock too.
 static const float kLODSnowSensitivity = 0.5;
 
+float ClassifyLODSnow(float3 color)
+{
+	SNOW_TEXEL_SCORE(score, color, 0.62 - 0.64 * kLODSnowSensitivity, 0.12);
+	return score;
+}
+
 // Scale of the berm's reach beside a trench (2^0.25).
 static const float kBermReach = 1.18920708;
 

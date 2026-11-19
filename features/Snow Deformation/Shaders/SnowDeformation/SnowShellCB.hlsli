@@ -104,16 +104,10 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	float4 FineWindow;
 	float4 padSlopeDrape;
 	float4 padDebugSkinDepth;
-	float4 BloodLook;
-	float4 BloodLook2;
-	float4 BloodLook3;
+	float4 padBloodLook[3];
 	float4 TrampleStyle;
 	float4 TessScreen;
 	float4 FieldDims;
-	float4 SnowClimate;
-	float4 SnowClimate2;
-	float4 SnowClimateOverride;
-	float4 SnowClimateLUT[3];
 }
 
 // The trench look's fixed values.

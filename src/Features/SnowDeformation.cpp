@@ -863,7 +863,7 @@ void SnowDeformation::PrepassSimulation()
 
 			ID3D11ShaderResourceView* nullPS = nullptr;
 			context->PSSetShaderResources(101, 1, &nullPS);
-			context->PSSetShaderResources(kLandBermSlot, 1, &nullPS);
+			context->PSSetShaderResources(kBodyReachSlot, 1, &nullPS);
 
 			const UINT zeroFlag[4] = { 0, 0, 0, 0 };
 			context->ClearUnorderedAccessViewUint(deformActivityUAV.get(), zeroFlag);

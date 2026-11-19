@@ -677,10 +677,7 @@ namespace SharedData
 		float WaterWindowTexel;
 		float WaterWindowDim;
 
-		// Ice at the player (Wet Snow and Ice): pressed prints in the land's
-		// recoloured snow glaze like the shell's. Was a pad. Mirror in
-		// SnowDeformation.h.
-		float LandIce;
+		float padLandIce;
 		float padProjSnowNormalEnable;
 		// The snow set's specular level (its F0 scale), for the land recolor.
 		float SnowSpecularLevel;
@@ -691,15 +688,7 @@ namespace SharedData
 		int4 padPrintRect;
 
 		float padParallaxFlatten;
-		// Wet Snow and Ice: the ageing clock IceHistory was written at, in the
-		// track dates' frame. Was a pad. Mirror in SnowDeformation.h.
-		float IceClock;
-		float2 padIceClock;
-
-		// Wet Snow and Ice: the climate rows' ice (xyz) when each ageing-clock
-		// unit ended, the current unit's now (SnowColor.hlsli SnowIce::AtCut).
-		// Appended last. Mirror in SnowDeformation.h, kIceHistoryBins.
-		float4 IceHistory[128];
+		float3 padIceClock;
 	};
 
 	cbuffer FeatureData : register(b6)

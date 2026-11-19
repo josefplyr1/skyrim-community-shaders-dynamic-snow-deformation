@@ -31,12 +31,6 @@ cbuffer WindowFillCB : register(b0)
 // Snow depth on far land, in world units: the Snow 01 family's depth (kSnowClassDepths[3] in SnowDeformation.h).
 static const float kFarSnowDepth = 30.0;
 
-float ClassifyLODSnow(float3 color)
-{
-	SNOW_TEXEL_SCORE(score, color, 0.62 - 0.64 * kLODSnowSensitivity, 0.12);
-	return score;
-}
-
 [numthreads(8, 8, 1)] void main(uint3 id : SV_DispatchThreadID) {
 	if (id.x >= WindowDim || id.y >= WindowDim)
 		return;

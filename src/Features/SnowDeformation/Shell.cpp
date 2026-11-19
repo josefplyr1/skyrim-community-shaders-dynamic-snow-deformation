@@ -969,12 +969,6 @@ void SnowDeformation::DrawShell()
 	const auto& dynRes = globals::game::frameBufferCached.GetDynamicResolutionParams1();
 	const float2 landContest = LandBlendContest();
 	cbData.CompactLook = { 0.0f, landContest.x, landContest.y, 0.0f };
-	{
-		auto* player = RE::PlayerCharacter::GetSingleton();
-		cbData.SnowClimate = { 0.0f, kClimateLapse, player ? player->GetPosition().z : 0.0f, 0.0f };
-		cbData.SnowClimate2 = { 0.0f, 0.0f, 0.0f, 1.0f };
-		cbData.SnowClimateOverride = { -1.0f, -1.0f, -1.0f, 0.0f };
-	}
 	cbData.DebugNoFarPad = 0.0f;
 	cbData.ShellCullBare = shellTerrainTexture ? 1.0f : 0.0f;
 	cbData.ObjectLiftCap = 0.5f;

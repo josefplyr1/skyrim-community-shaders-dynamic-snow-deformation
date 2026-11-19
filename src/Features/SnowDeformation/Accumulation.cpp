@@ -50,26 +50,10 @@ void SnowDeformation::TickSnowAgeing()
 	if (elapsed <= 0.0f)
 		return;
 	climate.ageingClock += climate.ageingRate * elapsed;
-	climate.ageingTotal += (double)climate.ageingRate * elapsed;
 	while (climate.ageingClock >= 2.0f * kAgeingClockStart) {
 		climate.ageingClock -= kAgeingClockStart;
 		climate.ageingRebase += kAgeingClockStart;
 	}
-}
-
-float SnowDeformation::SnowIceShown(uint32_t) const
-{
-	return 0.0f;
-}
-
-float SnowDeformation::SnowIceSinceCut(uint32_t, uint32_t) const
-{
-	return 0.0f;
-}
-
-float SnowDeformation::SnowWetIceStrength() const
-{
-	return 0.0f;
 }
 
 float4 SnowDeformation::TrackAgeConstants() const
