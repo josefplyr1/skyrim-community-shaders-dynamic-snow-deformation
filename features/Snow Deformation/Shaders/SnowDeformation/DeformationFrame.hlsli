@@ -13,9 +13,6 @@ float2 WindBias;
 float DeltaTime;
 float3 padMelt;
 
-float3 padCrust;
-float padSlumpRate;
-
 uint FramePad;
 float GameDeltaTime;
 uint DebugActivityView;

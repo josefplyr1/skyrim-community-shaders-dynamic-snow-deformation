@@ -13,18 +13,8 @@ cbuffer HeightProcessCB : register(b0)
 	uint TerrainDim;
 
 	float GhostDecay;
-	float padObjectSnowDepth;
-	float padRimStep;
-	float padOverheadIgnore;
-
-	float padShelterBandHeight;
-	float padDiffuseLambda;
-	float padShelterMaxHeight;
-	float padShelterConeTan;
-
-	uint HeightProcessKeeper;
 	uint DeadGhostTiles;
-	uint2 HeightProcessPad;
+	float2 padGhost;
 }
 
 #define SHELTER_MELT 0.9

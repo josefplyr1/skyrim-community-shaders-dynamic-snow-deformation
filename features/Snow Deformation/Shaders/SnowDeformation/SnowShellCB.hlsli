@@ -89,9 +89,6 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 
 	float4 SnowParallax;
 
-	float4 padSpellShading;
-	float4 padTrackAge;
-	float4 padCrustLook2;
 	float4 BorderStyle;
 	float4 CompactLook;
 	float4 RimStyle;
@@ -102,9 +99,6 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	int2 ShellFlags;
 
 	float4 FineWindow;
-	float4 padSlopeDrape;
-	float4 padDebugSkinDepth;
-	float4 padBloodLook[3];
 	float4 TrampleStyle;
 	float4 TessScreen;
 	float4 FieldDims;

@@ -280,8 +280,6 @@ public:
 
 		float DeltaTime;
 		float padMelt[3];
-		float padCrust[3];
-		float padSlumpRate;
 
 		uint FramePad;
 		float GameDeltaTime;
@@ -315,8 +313,8 @@ public:
 		float DrawnPad;
 	};
 	STATIC_ASSERT_ALIGNAS_16(PerFrame);
-	static_assert(offsetof(PerFrame, ContactCenter) == 8336, "PerFrame tail must match the fxc-reflected layout of DeformationUpdateCS");
-	static_assert(offsetof(PerFrame, AccumulationScale) == 8424 && sizeof(PerFrame) == 8432, "PerFrame tail must match the fxc-reflected layout of DeformationUpdateCS");
+	static_assert(offsetof(PerFrame, ContactCenter) == 8320, "PerFrame tail must match the fxc-reflected layout of DeformationUpdateCS");
+	static_assert(offsetof(PerFrame, AccumulationScale) == 8408 && sizeof(PerFrame) == 8416, "PerFrame tail must match the fxc-reflected layout of DeformationUpdateCS");
 
 	static constexpr float kTrenchWallSharpness = 66.0f;
 
@@ -660,9 +658,6 @@ public:
 
 		float4 SnowParallax;
 
-		float4 padSpellShading;
-		float4 padTrackAge;
-		float4 padCrustLook2;
 		float4 BorderStyle;
 		float4 CompactLook;
 		float4 RimStyle;
@@ -672,16 +667,13 @@ public:
 		DirectX::XMINT2 DeformMapOrigin;
 		DirectX::XMINT2 ShellFlags;
 		float4 FineWindow;
-		float4 padSlopeDrape;
-		float4 padDebugSkinDepth;
-		float4 padBloodLook[3];
 		float4 TrampleStyle;
 		float4 TessScreen;
 		float4 FieldDims;
 	};
 	STATIC_ASSERT_ALIGNAS_16(ShellCB);
-	static_assert(offsetof(ShellCB, TrampleStyle) == 800, "ShellCB tail must match the fxc-reflected layout of both shells");
-	static_assert(sizeof(ShellCB) == 848, "ShellCB tail must match the fxc-reflected layout of SnowShell.hlsl");
+	static_assert(offsetof(ShellCB, TrampleStyle) == 672, "ShellCB tail must match the fxc-reflected layout of both shells");
+	static_assert(sizeof(ShellCB) == 720, "ShellCB tail must match the fxc-reflected layout of SnowShell.hlsl");
 
 	struct PointShadowLightData
 	{
@@ -1140,21 +1132,11 @@ public:
 		uint TerrainDim;
 
 		float GhostDecay;
-		float padObjectSnowDepth;
-		float padRimStep;
-		float padOverheadIgnore;
-
-		float padShelterBandHeight;
-		float padDiffuseLambda;
-		float padShelterMaxHeight;
-		float padShelterConeTan;
-
-		uint keeper;
 		uint DeadGhostTiles;
-		uint pad1;
-		uint pad2;
+		float padGhost[2];
 	};
 	STATIC_ASSERT_ALIGNAS_16(HeightProcessCB);
+	static_assert(sizeof(HeightProcessCB) == 64, "HeightProcessCB must match the fxc-reflected layout of HeightMapProcessCS.hlsl");
 
 	ConstantBuffer* heightProcessCB = nullptr;
 
