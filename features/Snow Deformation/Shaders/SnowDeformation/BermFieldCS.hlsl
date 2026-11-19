@@ -1,7 +1,7 @@
 #include "SnowDeformation/SnowCommon.hlsli"
 
 Texture2D<float4> DeformationMap : register(t0);
-RWTexture2D<float4> OutBermField : register(u0);
+RWTexture2D<float2> OutBermField : register(u0);
 StructuredBuffer<uint> BermTilesIn : register(t1);
 
 RWTexture2D<uint> OutBermOccupancy : register(u2);
@@ -84,7 +84,7 @@ bool BermTexel(uint2 phys)
 
 	const float berm = saturate(b / 17.0);
 	const float blur = s / 9.0;
-	OutBermField[phys] = float4(berm, blur, 0.0, 0.0);
+	OutBermField[phys] = float2(berm, blur);
 	return berm != 0.0 || blur != 0.0;
 }
 

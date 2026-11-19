@@ -72,7 +72,7 @@ float BermGradStep()
 
 static const float kWallBlurReach = 12.0;
 
-float4 BermFieldBaked(float2 gridLocal)
+float2 BermFieldBaked(float2 gridLocal)
 {
 	float2 uv = (GridToDeformOffset + gridLocal) * DeformInvWorldSize;
 	if (any(uv < 0.0) || any(uv > 1.0))
@@ -81,18 +81,18 @@ float4 BermFieldBaked(float2 gridLocal)
 	SNOW_BERM_DIMS(dims);
 	float2 t = clamp(uv * dims - 0.5, 0.0, dims - 1.001);
 #ifdef SNOW_DEFORM_SAMPLER
-	float4 v = BermFieldMap.SampleLevel(SnowSampler, (t + 0.5 + float2(DeformMapOrigin)) / dims, 0.0);
+	float2 v = BermFieldMap.SampleLevel(SnowSampler, (t + 0.5 + float2(DeformMapOrigin)) / dims, 0.0);
 #else
 	int2 t0 = (int2)t;
 	float2 f = t - t0;
 	int2 t1 = min(t0 + 1, int2(dims) - 1);
 
-	float4 s00 = BermFieldMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
-	float4 s10 = BermFieldMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
-	float4 s01 = BermFieldMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
-	float4 s11 = BermFieldMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
+	float2 s00 = BermFieldMap.Load(DeformTexel(int2(t0.x, t0.y), int2(dims)));
+	float2 s10 = BermFieldMap.Load(DeformTexel(int2(t1.x, t0.y), int2(dims)));
+	float2 s01 = BermFieldMap.Load(DeformTexel(int2(t0.x, t1.y), int2(dims)));
+	float2 s11 = BermFieldMap.Load(DeformTexel(int2(t1.x, t1.y), int2(dims)));
 
-	float4 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
+	float2 v = lerp(lerp(s00, s10, f.x), lerp(s01, s11, f.x), f.y);
 #endif
 	return v;
 }

@@ -226,7 +226,7 @@ float2 SampleExclusionMask(float2 worldXY)
 	return max(nearMask, SampleExclusionField(worldXY));
 }
 
-float4 BermFieldPair(float2 gridLocal)
+float2 BermFieldPair(float2 gridLocal)
 {
 	return BermFieldBaked(gridLocal);
 }
