@@ -542,18 +542,14 @@ namespace SharedData
 	{
 		float2 WindowOrigin;
 		float InvWorldSize;
-		// Snow Follows Parallax: Lighting reads the projection noise where
-		// the object's parallax drew its texel (SnowLighting
-		// ParallaxProjNoise). Was a pad. Mirror in SnowDeformation.h.
-		float ParallaxFollow;
+		float padParallaxFollow;
 
 		uint DebugTerrainOverlay;
 		// Horizon snow (LOD terrain recolor): distance ramp start and 1/band,
 		// aligned to the shell's edge so the geometry hands off seamlessly.
 		float LODReplaceStart;
 		float LODReplaceFadeInv;
-		// LOD snow classification sensitivity, shared with the window fill.
-		float LODSnowSensitivity;
+		float padLODSnowSensitivity;
 
 		// Snow albedo (t33) color space + material response for the recolor.
 		float SnowIsLinear;
@@ -561,27 +557,17 @@ namespace SharedData
 		float LODReplaceEnable;
 		// Snow normal map bound at t23 (0 = legacy set without one).
 		float SnowHasNormal;
-		// Snow-textured mesh recolor (statics hook flags unprojected snow-named
-		// shapes as SnowLODBakedIsSnow); the old LODReplaceLegacy slot. Mirror
-		// in SnowDeformation.h.
-		float SnowTexturedEnable;
-		// Projected-snow material match (SNOW-MATCH Phase 2) enabled and the
-		// snow set is bound at t33.
+		float padSnowTexturedEnable;
+		// The object recolors (projected snow, snow-textured meshes) are on and
+		// the snow set is bound at t33.
 		float ProjSnowEnable;
-		// was BakedSnowEnable (glacier match, retired); slot kept for layout.
-		float LODObjectEnable;
-		// cos(max angle): the slope cut applied to the vertex alpha of draws
-		// flagged SnowProjectedUnauthored (runtime-applied projections carry
-		// cos 0 and no alpha mask). Mirror in SnowDeformation.h.
-		float ProjUnauthoredThreshold;
+		float padLODObjectEnable;
+		float padProjUnauthoredThreshold;
 
 		// Toroidal deformation-map addressing: physical position of logical
 		// texel (0,0); every map Load adds this and masks by dim-1.
 		int2 DeformMapOrigin;
-		// Snow Climate x wetness at the player: a pressed print in the land's
-		// recoloured snow darkens like the shell's. Was a pad. Mirror in
-		// SnowDeformation.h.
-		float LandWetPrint;
+		float padLandWetPrint;
 		float padPrintFullDepth;
 
 		// Water raster (t63) frame: world xy of texel (0,0), texel size;
@@ -594,9 +580,7 @@ namespace SharedData
 		// recoloured snow glaze like the shell's. Was a pad. Mirror in
 		// SnowDeformation.h.
 		float LandIce;
-		// Recolored projected snow also wears the shell snow's normal (vanilla's
-		// own projected normal is a dead write). Mirror in SnowDeformation.h.
-		float ProjSnowNormalEnable;
+		float padProjSnowNormalEnable;
 		// The snow set's specular level (its F0 scale), for the land recolor.
 		float SnowSpecularLevel;
 		// Land Snow Recolor: luminance where a snow layer's texel starts to
@@ -605,10 +589,7 @@ namespace SharedData
 
 		int4 padPrintRect;
 
-		// Flatten Parallax Under Snow: Extended Materials' parallax fades out
-		// under projected snow and a band around it (SnowLighting
-		// ParallaxUnderSnow). Mirror in SnowDeformation.h.
-		float ParallaxFlatten;
+		float padParallaxFlatten;
 		// Wet Snow and Ice: the ageing clock IceHistory was written at, in the
 		// track dates' frame. Was a pad. Mirror in SnowDeformation.h.
 		float IceClock;

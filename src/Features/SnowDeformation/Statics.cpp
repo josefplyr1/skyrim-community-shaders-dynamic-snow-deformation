@@ -555,38 +555,35 @@ void SnowDeformation::SetProjectedSnowBit(RE::BSLightingShader* a_shader, RE::BS
 		return;
 	using Flag = RE::BSShaderProperty::EShaderPropertyFlag;
 	bool bindSnowSet = false;
-	if (settings.ProjSnowMatch) {
-		const bool passProjected = (a_shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) != 0;
-		const bool treeAnim = a_pass->shaderProperty->flags.all(Flag::kTreeAnim);
-		const auto& rec = RecordOf(a_pass->geometry, static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material));
-		if (rec.seasonsProj && !treeAnim)
-			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedUnauthored);
-		if (rec.seasonsStatic && !treeAnim)
-			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedNoAlpha);
-		if (settings.MultipassSnowFollowsPaint && !rec.seasonsProj && !treeAnim && rec.mato != MatoClass::kNotSnow &&
-			a_pass->shaderProperty->flags.all(Flag::kMultiIndexSnow))
-			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowMultipassBase);
-		if (settings.UnprojectedShapesBare && !passProjected && !treeAnim &&
-			(rec.mato == MatoClass::kSnow || rec.mato == MatoClass::kSnowSeasons) &&
-			!a_pass->shaderProperty->flags.any(Flag::kLODObjects, Flag::kHDLODObjects) &&
-			!NameFactsOf(a_pass->geometry).engineDecal)
-			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowObjectBarePass);
-		if (passProjected && !treeAnim && rec.mato != MatoClass::kNotSnow && !NameFactsOf(a_pass->geometry).engineDecal) {
-			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
-			bindSnowSet = true;
-		}
+	const bool passProjected = (a_shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) != 0;
+	const bool treeAnim = a_pass->shaderProperty->flags.all(Flag::kTreeAnim);
+	const auto& rec = RecordOf(a_pass->geometry, static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material));
+	if (rec.seasonsProj && !treeAnim)
+		extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedUnauthored);
+	if (rec.seasonsStatic && !treeAnim)
+		extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedNoAlpha);
+	if (!rec.seasonsProj && !treeAnim && rec.mato != MatoClass::kNotSnow &&
+		a_pass->shaderProperty->flags.all(Flag::kMultiIndexSnow))
+		extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowMultipassBase);
+	if (!passProjected && !treeAnim &&
+		(rec.mato == MatoClass::kSnow || rec.mato == MatoClass::kSnowSeasons) &&
+		!a_pass->shaderProperty->flags.any(Flag::kLODObjects, Flag::kHDLODObjects) &&
+		!NameFactsOf(a_pass->geometry).engineDecal)
+		extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowObjectBarePass);
+	if (passProjected && !treeAnim && rec.mato != MatoClass::kNotSnow && !NameFactsOf(a_pass->geometry).engineDecal) {
+		extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowProjectedIsSnow);
+		bindSnowSet = true;
 	}
-	if (settings.LODObjectSnow && !bindSnowSet &&
+	if (!bindSnowSet &&
 		a_pass->shaderProperty->flags.any(Flag::kLODObjects, Flag::kHDLODObjects) &&
 		!a_pass->shaderProperty->flags.all(Flag::kTreeAnim) &&
 		(a_shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) == 0) {
 		extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowLODBakedIsSnow);
 		bindSnowSet = true;
 	}
-	if (settings.SnowTexturedRecolor && settings.ProjSnowMatch && !bindSnowSet &&
+	if (!bindSnowSet &&
 		!a_pass->shaderProperty->flags.any(Flag::kLODObjects, Flag::kHDLODObjects, Flag::kTreeAnim) &&
 		(a_shader->currentRawTechnique & static_cast<uint32_t>(SIE::ShaderCache::LightingShaderFlags::ProjectedUV)) == 0) {
-		const auto& rec = RecordOf(a_pass->geometry, static_cast<RE::BSLightingShaderMaterialBase*>(a_pass->shaderProperty->material));
 		if (rec.pathSnowNamed && rec.mato != MatoClass::kNotSnow) {
 			extraDescriptor |= uint32_t(State::ExtraFeatureDescriptors::SnowLODBakedIsSnow);
 			if (rec.pathGroundSnow)
@@ -652,7 +649,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 		return;
 	const uint32_t depthBiasMode = globals::game::shadowState->GetRuntimeData().rasterStateDepthBiasMode;
 	const bool decalDepth = depthBiasMode != 0 || flags.any(Flag::kDecal, Flag::kDynamicDecal);
-	const bool snowTexOverlay = settings.SnowTexturedRecolor && rec.pathSnowNamed && PassBlendsOver(a_pass);
+	const bool snowTexOverlay = rec.pathSnowNamed && PassBlendsOver(a_pass);
 
 	{
 		const auto& wb = a_pass->geometry->worldBound;
@@ -690,7 +687,7 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 			mountainFeature = rec.depth > 0.5f;
 		}
 		const bool naturalFeature = rec.pathNatural || rec.iceName || mountainFeature;
-		const bool snowNamedCapture = settings.SnowTexturedRecolor && rec.pathSnowNamed && !snowTexOverlay;
+		const bool snowNamedCapture = rec.pathSnowNamed && !snowTexOverlay;
 		if (!(rec.pathBase || naturalFeature || snowNamedCapture || rec.roadLayer)) {
 			return;
 		}
@@ -1092,9 +1089,6 @@ void SnowDeformation::RenderObjectHeightMap()
 	processData.TerrainTexelSize = kShellVertexSpacing;
 	processData.TerrainDim = kShellWindowDim;
 	processData.GhostDecay = 0.5f;
-	processData.ShelterMaxHeight = std::clamp(settings.ShelterMaxHeight, 100.0f, 2000.0f);
-	processData.ShelterBandHeight = std::max(kShelterBandHeight, processData.ShelterMaxHeight);
-	processData.ShelterConeTan = std::tan(std::clamp(settings.ShelterDriftAngle, 5.0f, 70.0f) * (DirectX::XM_PI / 180.0f));
 	processData.DeadGhostTiles = 1u;
 	heightProcessCB->Update(processData);
 	heightWindowCenter = newCenter;
@@ -2566,10 +2560,8 @@ RE::BSContainer::ForEachResult SnowDeformation::ExclusionVisit(RE::TESObjectREFR
 				auto pos = a_ref->GetPosition();
 				float angleZ = a_ref->GetAngleZ();
 				float scale = a_ref->GetScale();
-				float zoneScale = std::max(settings.TrampleZoneScale, 0.0f);
-				const float meltStrength = spec.meltStrength > 0.0f ?
-				                               spec.meltStrength :
-				                               1.0f - std::clamp(settings.TrampleZoneHeight, 0.0f, 100.0f) / 100.0f;
+				const float zoneScale = kTrampleZoneScale;
+				const float meltStrength = spec.meltStrength > 0.0f ? spec.meltStrength : kTrampleZoneMelt;
 				const float elongation = std::max(spec.aspect, 1.0f) - 1.0f;
 				exclusionPending.push_back({ { pos.x + std::sin(angleZ) * spec.forwardBias * scale,
 												 pos.y + std::cos(angleZ) * spec.forwardBias * scale,

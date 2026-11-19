@@ -42,10 +42,10 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	float SnowSpecularLevel;
 	float EnableGlints;
 	float TrenchDetailRelief;
-	float TrenchDetailRoughness;
+	float padTrenchDetailRoughness;
 
 	float LayoutKeeper5;
-	float TrenchDetailCoverage;
+	float padTrenchDetailCoverage;
 	float ShellCullBare;
 	float LayoutKeeper11;
 
@@ -56,9 +56,9 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	float ObjectHeightHalfExtent;
 	float CrispShadows;
 	float ScreenSpaceShadowsActive;
-	float UndulationAmp;
+	float padUndulationAmp;
 
-	float UndulationScale;
+	float padUndulationScale;
 	float LayoutKeeper13;
 	float PointLightsActive;
 	float SkylightingActive;
@@ -66,9 +66,9 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	float HasSnowHeight;
 	float SnowReliefDepth;
 	float StaticsDebugView;
-	float BermHeightAmp;
+	float padBermHeightAmp;
 
-	float SpeedSpoil;
+	float padSpeedSpoil;
 	float LayoutKeeper9;
 	float DebugNoFarPad;
 	float LayoutKeeper4;
@@ -78,7 +78,7 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	float LayoutKeeper3;
 	float LayoutKeeper14;
 
-	float BermReach;
+	float padBermReach;
 	uint LayoutKeeper10;
 	float SeamRampInv;
 	float BermBakeActive;
@@ -102,7 +102,7 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	int2 ShellFlags;
 
 	float4 FineWindow;
-	float4 SlopeDrape;
+	float4 padSlopeDrape;
 	float4 padDebugSkinDepth;
 	float4 BloodLook;
 	float4 BloodLook2;
@@ -115,6 +115,13 @@ cbuffer ShellCB : register(SNOW_SHELL_CB_REGISTER)
 	float4 SnowClimateOverride;
 	float4 SnowClimateLUT[3];
 }
+
+// The trench look's fixed values.
+static const float kTrenchDetailCoverage = 1.75;
+static const float kBermHeight = 0.5;
+static const float kRimLip = 0.05;
+static const float kRimTeeth = 0.5;
+static const float kTrampledFlattening = 0.5;
 
 int3 DeformTexel(int2 t, int2 dims)
 {

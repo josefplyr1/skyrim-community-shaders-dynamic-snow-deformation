@@ -7,18 +7,14 @@ float RefillAmount;
 uint ClearMap;
 
 float StampFalloffStart;
-float BermReach;
+float padBermReach;
 float2 WindBias;
 
 float DeltaTime;
-float MeltPersistence;
-float MeltFloorStart;
-float MeltEdgeNoise;
+float3 padMelt;
 
-float CrustPrintDepth;
-float CrustThaw;
-float CrustBreakOnCarve;
-float SlumpRate;
+float3 padCrust;
+float padSlumpRate;
 
 uint FramePad;
 float GameDeltaTime;

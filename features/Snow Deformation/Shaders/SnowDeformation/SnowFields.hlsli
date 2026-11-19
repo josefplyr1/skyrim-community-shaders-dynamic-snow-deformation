@@ -67,7 +67,7 @@ float BermShape(float bermDeform)
 float BermGradStep()
 {
 	SNOW_DEFORM_DIMS(dims);
-	return min(4.0, max(4.0 * BermReach, 0.5 / (DeformInvWorldSize * dims.x)));
+	return min(4.0, max(4.0 * kBermReach, 0.5 / (DeformInvWorldSize * dims.x)));
 }
 
 static const float kWallBlurReach = 12.0;
@@ -106,7 +106,7 @@ float TrackAgeOf(float a_date)
 
 float3 TrackCarveLook(float a_age)
 {
-	return float3(saturate(a_age * 1.1111 - 0.1111), RimStyle.y * saturate(1.0 - a_age * 2.857), RimStyle.x * saturate(1.1111 - a_age * 2.2222));
+	return float3(saturate(a_age * 1.1111 - 0.1111), kRimTeeth * saturate(1.0 - a_age * 2.857), kRimLip * saturate(1.1111 - a_age * 2.2222));
 }
 
 float TrackBermScale(float a_age)
@@ -470,7 +470,7 @@ float TrampleDetailScale(float2 worldXY, float deformation)
 {
 	float scale = 1.0;
 	const float2 uv = (GridToDeformOffset + worldXY - GridOrigin) * DeformInvWorldSize;
-	[branch] if (TrampleStyle.y < 0.999 && deformation > 0.001 && all(uv >= 0.0) && all(uv <= 1.0))
+	[branch] if (deformation > 0.001 && all(uv >= 0.0) && all(uv <= 1.0))
 	{
 		SNOW_DEFORM_DIMS(dims);
 		const float2 t = clamp(uv * dims - 0.5, 0.0, dims.x - 1.001);
@@ -487,7 +487,7 @@ float TrampleDetailScale(float2 worldXY, float deformation)
 			const float pressed = max(carve.x - carve.y, 0.0) / layer;
 			packed[i] = saturate((pressed - TrampleStyle.z) / max(1.0 - TrampleStyle.z, 1e-3)) * smoothstep(0.05, 0.5, layer);
 		}
-		scale = lerp(1.0, saturate(TrampleStyle.y), lerp(lerp(packed.x, packed.y, f.x), lerp(packed.z, packed.w, f.x), f.y));
+		scale = lerp(1.0, kTrampledFlattening, lerp(lerp(packed.x, packed.y, f.x), lerp(packed.z, packed.w, f.x), f.y));
 	}
 	return scale;
 }
@@ -651,7 +651,7 @@ static const float kFireMeltFloor = 1.0;
 
 float Undulation(float2 worldXY)
 {
-	return UndulationNorm(worldXY, UndulationScale) * UndulationAmp;
+	return UndulationNorm(worldXY) * kUndulationAmp;
 }
 
 float3 UndulationBakedHG(float2 worldXY)
@@ -679,7 +679,7 @@ float UndulationSampled(float2 worldXY)
 {
 	float result;
 	[branch] if (UndulationBakedCovers(worldXY))
-		result = UndulationBakedHG(worldXY).x * UndulationAmp;
+		result = UndulationBakedHG(worldXY).x * kUndulationAmp;
 	else result = Undulation(worldXY);
 	return result;
 }
@@ -688,7 +688,7 @@ float2 UndulationGradSampled(float2 worldXY)
 {
 	float2 result;
 	[branch] if (UndulationBakedCovers(worldXY))
-		result = UndulationBakedHG(worldXY).yz * UndulationAmp;
+		result = UndulationBakedHG(worldXY).yz * kUndulationAmp;
 	else
 	{
 		const float uStep = kUndulationGradStep;
@@ -706,30 +706,24 @@ float CarveSlough(float deformation, float deformBlur, float a_round)
 	return lerp(d, deformBlur, a_round);
 }
 
-#define CARVE_PROFILE_SHAPE(profile, d, depthT, uncarvedDepth, look)                \
-	float soft = d * d * d * (d * (d * 6.0 - 15.0) + 10.0);                         \
-	d = lerp(soft, d, depthT);                                                      \
-	float profile = uncarvedDepth * (1.0 - d);                                      \
-	[branch] if (RimStyle.x > 0.001)                                                \
-	{                                                                               \
-		float hump = smoothstep(0.02, 0.10, d) * (1.0 - smoothstep(0.10, 0.35, d)); \
-		profile += look.z * uncarvedDepth * hump * depthT;                          \
-	}
+#define CARVE_PROFILE_SHAPE(profile, d, depthT, uncarvedDepth, look)            \
+	float soft = d * d * d * (d * (d * 6.0 - 15.0) + 10.0);                     \
+	d = lerp(soft, d, depthT);                                                  \
+	float profile = uncarvedDepth * (1.0 - d);                                  \
+	float hump = smoothstep(0.02, 0.10, d) * (1.0 - smoothstep(0.10, 0.35, d)); \
+	profile += look.z * uncarvedDepth * hump * depthT;
 
 float CarveProfile(float deformation, float deformBlur, float uncarvedDepth, float2 worldXY, float3 a_look)
 {
 	float depthT = smoothstep(6.0, 18.0, uncarvedDepth);
 	float d = CarveSlough(deformation, deformBlur, a_look.x);
 
-	[branch] if (RimStyle.y > 0.001)
+	float rimBand = smoothstep(0.02, 0.12, d) * (1.0 - smoothstep(0.30, 0.55, d));
+	[branch] if (rimBand > 0.0 && depthT > 0.0)
 	{
-		float rimBand = smoothstep(0.02, 0.12, d) * (1.0 - smoothstep(0.30, 0.55, d));
-		[branch] if (rimBand > 0.0 && depthT > 0.0)
-		{
-			float notch = (SnowDetailNoise(worldXY / 37.0) - 0.5) * 0.8 +
-			              (SnowDetailNoise(worldXY / 8.0) - 0.5) * 1.2;
-			d = saturate(d + notch * a_look.y * 0.35 * rimBand * depthT);
-		}
+		float notch = (SnowDetailNoise(worldXY / 37.0) - 0.5) * 0.8 +
+		              (SnowDetailNoise(worldXY / 8.0) - 0.5) * 1.2;
+		d = saturate(d + notch * a_look.y * 0.35 * rimBand * depthT);
 	}
 
 	CARVE_PROFILE_SHAPE(profile, d, depthT, uncarvedDepth, a_look)

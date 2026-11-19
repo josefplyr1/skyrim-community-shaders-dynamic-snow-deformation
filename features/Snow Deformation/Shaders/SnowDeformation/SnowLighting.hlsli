@@ -200,21 +200,17 @@ namespace SnowLighting
 
 			float3 a = SnowSetSample(SnowDeformation::HorizonSnowAlbedo, taps).rgb;
 			float3 shellAlbedo = SnowColor::SetAlbedo(a, SharedData::snowDeformationSettings.SnowIsLinear > 0.5);
-			const float wet = SharedData::snowDeformationSettings.LandWetPrint;
 			const float ice = SharedData::snowDeformationSettings.LandIce;
-			float press = 0.0;
 			float glaze = 0.0;
-			[branch] if (max(wet, ice) > 0.001)
+			[branch] if (ice > 0.001)
 			{
 				const float pressed = smoothstep(0.1, 0.5, SnowDeformation::GetDeformation(worldXY));
-				press = pressed * saturate(wet * 4.0);
 				float since = 0.0;
-				[branch] if (pressed > 0.001 && ice > 0.001)
+				[branch] if (pressed > 0.001)
 					since = max(ice - SnowIce::AtCut(SnowDeformation::GetCutDate(worldXY)).y, 0.0);
 				glaze = max(pressed * since, 0.1 * ice);
 			}
-			const float3 printTint = lerp(1.0, float3(0.76, 0.77, 0.80) * (1.0 - 0.25 * wet), press) * lerp(1.0, float3(0.93, 0.955, 0.985), glaze);
-			shellAlbedo *= printTint;
+			shellAlbedo *= lerp(1.0, float3(0.93, 0.955, 0.985), glaze);
 #	if defined(TRUE_PBR)
 			s.landSnowRaw = Color::PBRMaterialToLinear(shellAlbedo);
 #	else
@@ -230,7 +226,7 @@ namespace SnowLighting
 			s.landSnowRMAOS = kShellRMAOSDefault;
 			[branch] if (ShellHasRMAOS())
 				s.landSnowRMAOS = ShellRMAOS(SnowSetSample(SnowDeformation::HorizonSnowRmaos, taps));
-			s.landSnowRMAOS.x *= 1.0 - max(press * (0.24 + 0.26 * wet), glaze * 0.8);
+			s.landSnowRMAOS.x *= 1.0 - glaze * 0.8;
 			s.landSnowBits = bits;
 			s.landRecolor = true;
 		}
@@ -272,7 +268,7 @@ namespace SnowLighting
 	void LODRecolor(inout State s, float3 rawBaseColor, float2 uv, float2 worldXYRel, float3 normal)
 	{
 #	if defined(LODOBJECTS) || defined(LODOBJECTSHD)
-		bool snowLodOn = SharedData::snowDeformationSettings.LODObjectEnable > 0.5 &&
+		bool snowLodOn = SharedData::snowDeformationSettings.LODReplaceEnable > 0.5 &&
 		                 (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLODBakedIsSnow) != 0;
 		const float coverScale = exp2(SharedData::MipBias + 2.0);
 		const float2 coverDx = ddx(uv) * coverScale;
@@ -332,18 +328,21 @@ namespace SnowLighting
 #if !defined(LANDSCAPE)
 	void BeginObject(inout State s, float3 worldRel)
 	{
-		[branch] if (SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 || SharedData::snowDeformationSettings.SnowTexturedEnable > 0.5)
+		[branch] if (SharedData::snowDeformationSettings.ProjSnowEnable > 0.5)
 			s.underWater = SnowDeformation::UnderWater(worldRel + FrameBuffer::CameraPosAdjust.xyz);
 	}
 #endif
 
 #if defined(PROJECTED_UV)
+	// cos(87 degrees): the steepest slope Seasons of Skyrim's runtime snow keeps (SnowProjectedUnauthored draws).
+	static const float kSeasonsSnowMaxCos = 0.0523359738;
+
 	float ProjectionAlpha(State s, float vertexAlpha, float projDot)
 	{
 		[flatten] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedNoAlpha) != 0)
 			vertexAlpha = 1.0;
 		[flatten] if ((Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedUnauthored) != 0)
-			vertexAlpha *= smoothstep(SharedData::snowDeformationSettings.ProjUnauthoredThreshold - 0.1, SharedData::snowDeformationSettings.ProjUnauthoredThreshold + 0.1, projDot);
+			vertexAlpha *= smoothstep(kSeasonsSnowMaxCos - 0.1, kSeasonsSnowMaxCos + 0.1, projDot);
 		[flatten] if (s.underWater && (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0)
 			vertexAlpha = 0.0;
 		return vertexAlpha;
@@ -352,7 +351,7 @@ namespace SnowLighting
 #	if defined(EMAT) && !defined(LANDSCAPE) && !defined(SKINNED) && !defined(FACEGEN) && !defined(EYE)
 	float ParallaxProjNoise(inout State s, float projNoise, float3 worldRel, float3 triWeights, float2 uv, float2 uvOriginal)
 	{
-		[branch] if (SharedData::snowDeformationSettings.ParallaxFollow > 0.5 && SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 &&
+		[branch] if (SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 &&
 					 (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0)
 		{
 			const float3 pDx = ddx_fine(worldRel);
@@ -378,7 +377,7 @@ namespace SnowLighting
 	float ParallaxUnderSnow(float3 worldRel, float3 vertexNormal, float3 texProj, float vertexAlpha)
 	{
 		float keep = 1.0;
-		[branch] if (SharedData::snowDeformationSettings.ParallaxFlatten > 0.5 && SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 &&
+		[branch] if (SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 &&
 					 (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowProjectedIsSnow) != 0)
 		{
 #			if defined(TREE_ANIM)
@@ -416,7 +415,7 @@ namespace SnowLighting
 				const float3 snowPos = projWorldPos + s.parallaxShift;
 				float3 snowGradX, snowGradY;
 				Triplanar::ComputeGradients(projWorldPos, 1.0 / SnowDeformation::SnowUVTile, snowGradX, snowGradY);
-				[branch] if (SharedData::snowDeformationSettings.ProjSnowNormalEnable > 0.5 && SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
+				[branch] if (SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
 				{
 					worldNormal = normalize(lerp(worldNormal, vertexNormal, snowVerdict));
 					float3 texN = TriplanarStochasticGrad(SnowDeformation::HorizonSnowNormal, SNOW_PROJ_SAMPLER, snowPos, snowTriWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise, snowGradX, snowGradY).xyz * 2.0 - 1.0;
@@ -479,7 +478,7 @@ namespace SnowLighting
 	void SnowTexturedRecolor(inout State s, float3 rawBaseColor, float3 vertexNormal, float3 worldRel, float screenNoise,
 		inout float3 baseColor, inout float4 rawRMAOS, inout float3 worldNormal)
 	{
-		[branch] if (SharedData::snowDeformationSettings.SnowTexturedEnable > 0.5 && !s.underWater &&
+		[branch] if (SharedData::snowDeformationSettings.ProjSnowEnable > 0.5 && !s.underWater &&
 					 (Permutation::ExtraFeatureDescriptor & Permutation::ExtraFeatureFlags::SnowLODBakedIsSnow) != 0)
 		{
 			s.texMatch = true;
@@ -489,7 +488,7 @@ namespace SnowLighting
 			{
 				float3 snowTexWorld = worldRel + FrameBuffer::CameraPosAdjust.xyz;
 				float3 snowTexWeights = Triplanar::GetWeights(vertexNormal, vertexNormal);
-				[branch] if (SharedData::snowDeformationSettings.ProjSnowNormalEnable > 0.5 && SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
+				[branch] if (SharedData::snowDeformationSettings.SnowHasNormal > 0.5)
 				{
 					worldNormal = normalize(lerp(worldNormal, vertexNormal, s.texWeight));
 					float3 texN = Triplanar::SampleStochastic(SnowDeformation::HorizonSnowNormal, SampColorSampler, snowTexWorld, snowTexWeights, 1.0 / SnowDeformation::SnowUVTile, screenNoise).xyz * 2.0 - 1.0;

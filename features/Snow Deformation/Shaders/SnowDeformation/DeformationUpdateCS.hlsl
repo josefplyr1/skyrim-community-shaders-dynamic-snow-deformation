@@ -1,23 +1,14 @@
+#include "SnowDeformation/SnowCommon.hlsli"
 #include "SnowDeformation/SnowNoise.hlsli"
 
 #define MAX_STAMPS 256
 
-#define STAMP_MODE_CONE 10.0
-#define STAMP_MODE_BOWL 20.0
 #define STAMP_MODE_BODY 40.0
 #define STAMP_IMPACT_SCALE 0.45
-#define CARVE_BOWL_FLOOR 0.0
-#define CONE_FRONT_LEAD 0.1
+// A stamp reaches no texel past this many radii: the carve ends at 1, the impact ring at 1.3.
+#define STAMP_GATE 1.3
 
 #define DRIFT_FETCH_TEXELS 3.0
-#define MELT_NOISE_COARSE 80.0
-#define MELT_NOISE_FINE 24.0
-#define PIT_LOBES 5
-#define PIT_LOBE_MIN 0.45
-#define PIT_LOBE_MAX 1.15
-#define PIT_LOBE_WIDTH 0.16
-#define PIT_POCK_CELLS_ACROSS 4.5
-#define PIT_POCK_CELL_MIN 6.0
 #define DRIFT_GAIN 2.0
 
 #define SLUMP_RADII 3
@@ -33,6 +24,9 @@ static const float2 kSlumpAxis[SLUMP_AXES] = {
 };
 #define SLUMP_SPEED 0.5
 #define SLUMP_FLOOR_NOISE 0.45
+#define SLUMP_NOISE_CELL 80.0
+// How fast thin snow between two trails settles.
+static const float kSlumpRate = 0.1;
 
 cbuffer PerFrame : register(b0)
 {
@@ -46,7 +40,6 @@ cbuffer PerFrame : register(b0)
 
 	float4 Stamps[MAX_STAMPS];
 	float4 StampEnds[MAX_STAMPS];
-	float4 StampCones[MAX_STAMPS];
 
 	float2 ContactCenter;
 	float ContactHalfExtent;
@@ -61,10 +54,7 @@ cbuffer PerFrame : register(b0)
 	uint PassClock;
 	uint PassGap;
 	uint2 PassPad;
-	float4 ShoutShape;
-	float4 ShoutChurn;
-	float UndulationAmp;
-	float UndulationScale;
+	float2 padUndulation;
 	float AccumulationScale;
 	float DrawnPad;
 }
@@ -271,8 +261,6 @@ bool EvolveTexel(uint2 phys)
 
 	const float4 carried = CurrentDeformation[phys];
 	float deformation = carried.x;
-	float melted = carried.y;
-	float crust = carried.z;
 	float impact = carried.w;
 
 	{
@@ -288,15 +276,11 @@ bool EvolveTexel(uint2 phys)
 			}
 			refill *= lerp(1.0, (1.0 - upwindDeformation) * DRIFT_GAIN, windStrength);
 		}
-		refill *= lerp(1.0, 1.0 - saturate(MeltPersistence), saturate(max(melted, 0.0) / max(deformation, 1e-4)));
 
 		deformation = max(deformation - refill, 0.0);
-		melted = melted >= 0.0 ? min(max(melted - refill, 0.0), deformation) :
-		                         min(melted + refill, 0.0);
-		crust = max(crust - refill - CrustThaw * GameDeltaTime, 0.0);
 		impact = max(impact - refill, 0.0);
 
-		[branch] if (SlumpRate > 0.001 && deformation < 0.999 && abs(melted) < 0.005)
+		[branch] if (deformation < 0.999)
 		{
 			float slumpTarget = 0.0;
 			[unroll] for (uint axis = 0; axis < SLUMP_AXES; axis++)
@@ -315,16 +299,15 @@ bool EvolveTexel(uint2 phys)
 				if (gate > SLUMP_MIN_SUPPORT)
 					slumpTarget = max(slumpTarget, axisTarget);
 			}
-			slumpTarget *= SLUMP_SETTLE * (1.0 - SLUMP_FLOOR_NOISE * StampNoise(worldPos / MELT_NOISE_COARSE));
+			slumpTarget *= SLUMP_SETTLE * (1.0 - SLUMP_FLOOR_NOISE * StampNoise(worldPos / SLUMP_NOISE_CELL));
 			[branch] if (slumpTarget - deformation > max(slumpTarget, deformation) * exp2(-10.0) + 1e-6)
 			{
-				deformation = min(deformation + SlumpRate * SLUMP_SPEED * (1.0 - crust) * GameDeltaTime,
-					slumpTarget);
+				deformation = min(deformation + kSlumpRate * SLUMP_SPEED * GameDeltaTime, slumpTarget);
 			}
 		}
 	}
 
-	float4 result = float4(deformation, melted, crust, impact);
+	float4 result = float4(deformation, 0.0, 0.0, impact);
 	CurrentDeformation[phys] = result;
 
 	ActivityAccumulate(StoredDelta(result, carried), pixel);
@@ -469,7 +452,7 @@ groupshared uint gSnapRows[SNAPSHOT_SIDE * 8];
 	{
 		need = ForceAllDirty != 0;
 		if (!need) {
-			const int halo = (int)ceil((40.0 * BermReach / max(TexelSize, 1e-3) + 2.0) / 8.0);
+			const int halo = (int)ceil((40.0 * kBermReach / max(TexelSize, 1e-3) + 2.0) / 8.0);
 			for (int dy = -halo; dy <= halo && !need; dy++)
 				for (int dx = -halo; dx <= halo && !need; dx++) {
 					const uint2 t = (DTid.xy + uint2(int2(dx, dy) + int2(dims))) & (dims - 1);
@@ -520,36 +503,6 @@ float ContactAbove(float2 worldPos, float contact)
 	return (contact - groundLayer.x) / groundLayer.y;
 }
 
-float4 ShoutMark(float2 worldPos, float2 apex, float2 seg, float segLenSq, float3 cone)
-{
-	float axisLen = sqrt(segLenSq);
-	float2 axis = axisLen > 1e-3 ? seg / axisLen : float2(1.0, 0.0);
-	float2 rel = worldPos - apex;
-	float along = dot(rel, axis);
-	float perp = rel.x * axis.y - rel.y * axis.x;
-	float reach = max(cone.x, axisLen);
-	float u = along / reach;
-	float waist = clamp(ShoutShape.x, 0.05, 0.95);
-	float t = u < waist ? (waist - u) / waist : (u - waist) / (1.0 - waist);
-	float m = max(ShoutShape.y, 1.0);
-	float env = pow(max(1.0 - pow(saturate(t), m), 0.0), 1.0 / m);
-	float halfWidth = max(cone.y * env, 1e-3);
-	float churn = saturate(ShoutChurn.x);
-	float2 np = float2(along / max(ShoutChurn.y * ShoutChurn.z, 1.0), perp / max(ShoutChurn.y, 1.0)) + cone.z;
-	float n = 0.7 * StampNoise(np) + 0.3 * StampNoise(np * 2.9 + 17.3);
-	float edgeCoord = abs(perp) / halfWidth / (1.0 + (n - 0.5) * 0.6 * churn);
-	edgeCoord = (along < 0.0 || u > 1.0) ? 1e6 : edgeCoord;
-	float fade = lerp(1.0, saturate(ShoutShape.w), smoothstep(saturate(ShoutShape.z), 1.0, u));
-	float lead = reach * CONE_FRONT_LEAD;
-	float frontAlong = axisLen * (1.0 + CONE_FRONT_LEAD);
-	float reveal = 1.0 - smoothstep(frontAlong - lead, frontAlong, along);
-	float coneSoft = fade * reveal;
-	float band = max(0.2 * churn, 1e-3);
-	float thr = 0.9 * churn * u;
-	float cover = smoothstep(thr - band, thr + band, n);
-	return float4(edgeCoord, coneSoft, coneSoft * cover * lerp(1.0, n, 0.35 * churn), along);
-}
-
 bool StampTexel(uint2 phys)
 {
 	uint2 dims;
@@ -558,25 +511,13 @@ bool StampTexel(uint2 phys)
 
 	const float4 carried = CurrentDeformation[phys];
 	float deformation = carried.x;
-	float melted = carried.y;
-	float crust = carried.z;
 
 	float2 worldPos = WindowOrigin + (float2(pixel) + 0.5) * TexelSize;
 	float bodyReach = 0.0;
 	float cutNow = 0.0;
 
 	float carve = deformation;
-	float meltTarget = 0.0;
-	float meltRate = 0.0;
-	float scorch = max(-melted, 0.0);
 	float impact = carried.w;
-	float crustTarget = 0.0;
-	float crustRate = 0.0;
-	float crustBreak = 0.0;
-	const float standingCrust = crust;
-
-	const float gateScale = max(PIT_LOBE_MAX + PIT_LOBE_WIDTH, 1.0 + MeltEdgeNoise);
-	const float gateScaleSq = gateScale * gateScale;
 
 	for (uint i = 0; i < StampCount; i++) {
 		float2 p0 = StampEnds[i].xy;
@@ -588,109 +529,28 @@ bool StampTexel(uint2 phys)
 		float distSq = dot(delta, delta);
 		float radius = Stamps[i].w;
 
-		float modeRaw = StampEnds[i].z;
-		bool isBody = modeRaw > STAMP_MODE_BODY - 0.5;
-		modeRaw = isBody ? modeRaw - STAMP_MODE_BODY : modeRaw;
-		bool isBowl = modeRaw > STAMP_MODE_BOWL - 0.5;
-		float modeNoBowl = isBowl ? modeRaw - STAMP_MODE_BOWL : modeRaw;
-		bool isCone = modeNoBowl > STAMP_MODE_CONE - 0.5;
-		float mode = isCone ? modeNoBowl - STAMP_MODE_CONE : modeNoBowl;
+		float mode = StampEnds[i].z;
+		bool isBody = mode > STAMP_MODE_BODY - 0.5;
+		mode = isBody ? mode - STAMP_MODE_BODY : mode;
 
-		[branch] if (distSq < radius * radius * gateScaleSq)
+		[branch] if (distSq < radius * radius * (STAMP_GATE * STAMP_GATE))
 		{
-			float dist = sqrt(distSq);
-
-			float edgeCoord = dist / max(radius, 1e-3);
-			float coneSoft = 1.0;
-			float coneCarve = 1.0;
-			[branch] if (isCone)
+			float edgeCoord = sqrt(distSq) / max(radius, 1e-3);
+			float falloff = 1.0 - smoothstep(StampFalloffStart, 1.0, edgeCoord);
+			const float impactE = saturate((mode - floor(mode)) / STAMP_IMPACT_SCALE);
+			float reach = Stamps[i].z * falloff;
+			float printed = reach * (isBody ? BodyPrint : 1.0);
+			[flatten] if (isBody)
 			{
-				const float4 shout = ShoutMark(worldPos, p0, seg, segLenSq, StampCones[i].xyz);
-				edgeCoord = shout.x;
-				coneSoft = shout.y;
-				coneCarve = shout.z;
-			}
-
-			[branch] if (mode < 0.5)
-			{
-				float edgeDist = edgeCoord;
-				float falloff = (1.0 - smoothstep(isBowl ? CARVE_BOWL_FLOOR : StampFalloffStart, 1.0, edgeDist)) * coneCarve;
-
-				const float impactE = saturate((mode - floor(mode)) / STAMP_IMPACT_SCALE);
-				float force = saturate(StampEnds[i].w);
-				float resist = standingCrust * (1.0 - force);
-				float reach = Stamps[i].z * falloff * lerp(1.0, CrustPrintDepth, resist);
-				float printed = reach * (isBody ? BodyPrint : 1.0);
-				[flatten] if (isBody)
-				{
-					bodyReach = max(bodyReach, reach);
-				}
-				else
-				{
-					carve = max(carve, printed);
-					cutNow = max(cutNow, printed);
-				}
-
-				impact = max(impact, impactE * coneSoft * (1.0 - smoothstep(0.6, 1.3, edgeCoord)));
-				crustBreak = max(crustBreak, saturate(max(force, printed * CrustBreakOnCarve) * falloff));
-			}
-			else if (mode > 2.5)
-			{
-				float glazeWobble = 1.0;
-				[branch] if (MeltEdgeNoise > 0.001)
-				{
-					float wobble = 0.5 * StampNoise(worldPos / MELT_NOISE_FINE) +
-					               0.5 * StampNoise(worldPos / MELT_NOISE_COARSE);
-					glazeWobble = 1.0 + (wobble - 0.5) * 2.0 * MeltEdgeNoise;
-				}
-				float falloff = (1.0 - smoothstep(MeltFloorStart, 1.0, edgeCoord / max(glazeWobble, 1e-3))) * coneSoft;
-				crustTarget = max(crustTarget, Stamps[i].z * falloff);
-				crustRate += Stamps[i].z * StampEnds[i].w * falloff;
-			}
-			else if (mode > 1.5)
-			{
-				float2 centre = Stamps[i].xy;
-				float shape = 1.0 - smoothstep(0.15, 1.0, edgeCoord);
-
-				[branch] if (!isCone)
-					[unroll] for (int lobe = 0; lobe < PIT_LOBES; lobe++)
-				{
-					float2 seed = centre * 0.05 + float2(lobe * 7.3, lobe * 3.1);
-					float angle = StampNoiseHash(floor(seed)) * 6.2831853;
-					float legLength = radius * lerp(PIT_LOBE_MIN, PIT_LOBE_MAX,
-												   StampNoiseHash(floor(seed + 31.7)));
-					float2 tip = centre + float2(cos(angle), sin(angle)) * legLength;
-
-					float2 legVec = tip - centre;
-					float legLenSq = max(dot(legVec, legVec), 1e-4);
-					float legT = saturate(dot(worldPos - centre, legVec) / legLenSq);
-					float2 legDelta = worldPos - (centre + legVec * legT);
-					float legWidth = radius * PIT_LOBE_WIDTH * (1.0 - 0.75 * legT);
-					shape = max(shape, 1.0 - smoothstep(0.2, 1.0, length(legDelta) / max(legWidth, 1e-3)));
-				}
-
-				float pockCell = max(radius / PIT_POCK_CELLS_ACROSS, PIT_POCK_CELL_MIN);
-				float pock = StampNoise(worldPos / pockCell);
-				shape *= max(smoothstep(0.30, 0.62, pock), 0.45);
-
-				float pitDepth = Stamps[i].z * shape * coneSoft;
-				carve = max(carve, pitDepth);
-				cutNow = max(cutNow, pitDepth);
-				scorch = max(scorch, pitDepth);
+				bodyReach = max(bodyReach, reach);
 			}
 			else
 			{
-				float meltWobble = 1.0;
-				[branch] if (MeltEdgeNoise > 0.001)
-				{
-					float wobble = 0.5 * StampNoise(worldPos / MELT_NOISE_FINE) +
-					               0.5 * StampNoise(worldPos / MELT_NOISE_COARSE);
-					meltWobble = 1.0 + (wobble - 0.5) * 2.0 * MeltEdgeNoise;
-				}
-				float falloff = (1.0 - smoothstep(MeltFloorStart, 1.0, edgeCoord / max(meltWobble, 1e-3))) * coneSoft;
-				meltTarget = max(meltTarget, Stamps[i].z * falloff);
-				meltRate += Stamps[i].z * StampEnds[i].w * falloff;
+				carve = max(carve, printed);
+				cutNow = max(cutNow, printed);
 			}
+
+			impact = max(impact, impactE * (1.0 - smoothstep(0.6, 1.3, edgeCoord)));
 		}
 	}
 
@@ -717,20 +577,18 @@ bool StampTexel(uint2 phys)
 				}
 			}
 			cover = saturate(cover / (4.0 * span * span));
-			const float crustDepth = lerp(1.0, CrustPrintDepth, standingCrust);
 			float dune = 0.0;
 			[branch] if (min(contact.x, contact.y) < CONTACT_NONE * 0.5)
-				dune = max(UndulationNorm(worldPos, UndulationScale) * UndulationAmp, 0.0);
+				dune = max(UndulationNorm(worldPos) * kUndulationAmp, 0.0);
 			float bodyContact = 0.0;
 			float propPrinted = 0.0;
 			[branch] if (contact.x < CONTACT_NONE * 0.5)
-				bodyContact = saturate(1.0 - ContactAboveDrawn(worldPos, contact.x, dune)) * crustDepth * cover.x;
+				bodyContact = saturate(1.0 - ContactAboveDrawn(worldPos, contact.x, dune)) * cover.x;
 			[branch] if (contact.y < CONTACT_NONE * 0.5)
-				propPrinted = saturate(1.0 - ContactAboveDrawn(worldPos, contact.y, dune)) * crustDepth * cover.y;
+				propPrinted = saturate(1.0 - ContactAboveDrawn(worldPos, contact.y, dune)) * cover.y;
 			bodyReach = max(bodyReach, bodyContact);
 			carve = max(carve, propPrinted);
 			cutNow = max(cutNow, propPrinted);
-			crustBreak = max(crustBreak, saturate(max(bodyContact * BodyPrint, propPrinted) * CrustBreakOnCarve));
 		}
 	}
 
@@ -745,22 +603,9 @@ bool StampTexel(uint2 phys)
 		[branch] if (bodyReach > BodyReachMax[phys] + 0.5 / 255.0)
 			BodyReachMax[phys] = bodyReach;
 	}
-	cutNow = max(cutNow, max(bodyReach, meltTarget));
+	cutNow = max(cutNow, bodyReach);
 
-	float total = carve;
-	[flatten] if (meltTarget > total)
-		total = min(total + meltRate * DeltaTime, meltTarget);
-	total = min(total, 1.0);
-
-	float meltedNow = min(melted + max(total - carve, 0.0), total);
-
-	float crustNow = saturate(crust * (1.0 - crustBreak));
-	[flatten] if (crustTarget > crustNow)
-		crustNow = min(crustNow + crustRate * DeltaTime, crustTarget);
-	crustNow = saturate(crustNow);
-
-	float4 result = float4(total,
-		meltedNow > 0.0 ? meltedNow : -min(scorch, 1.0), crustNow, saturate(impact));
+	float4 result = float4(min(carve, 1.0), 0.0, 0.0, saturate(impact));
 	CurrentDeformation[phys] = result;
 
 	[branch] if (cutNow > kTrackCutMin && cutNow >= deformation - kTrackFloorMargin)

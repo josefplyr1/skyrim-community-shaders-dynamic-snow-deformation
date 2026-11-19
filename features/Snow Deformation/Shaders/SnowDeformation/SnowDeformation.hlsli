@@ -37,7 +37,7 @@ namespace SnowDeformation
 
 	float ClassifyLODSnow(float3 gammaColor)
 	{
-		SNOW_TEXEL_SCORE(score, gammaColor, 0.62 - 0.64 * saturate(SharedData::snowDeformationSettings.LODSnowSensitivity), 0.12);
+		SNOW_TEXEL_SCORE(score, gammaColor, 0.62 - 0.64 * kLODSnowSensitivity, 0.12);
 		return score;
 	}
 

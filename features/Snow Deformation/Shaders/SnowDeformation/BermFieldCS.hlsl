@@ -1,3 +1,5 @@
+#include "SnowDeformation/SnowCommon.hlsli"
+
 Texture2D<float4> DeformationMap : register(t0);
 RWTexture2D<float4> OutBermField : register(u0);
 Texture2D<float> TrackClock : register(t2);
@@ -80,7 +82,7 @@ bool BermTexel(uint2 phys)
 
 	float2 b = Tap(centre, dims, true);
 	[unroll] for (int i = 0; i < 16; i++)
-		b += Tap(centre + kBermTaps[i] * (BermReach * invTexel), dims, true);
+		b += Tap(centre + kBermTaps[i] * (kBermReach * invTexel), dims, true);
 
 	const float blurReach = max(kWallBlurReach * invTexel, 1.0) / 18.0;
 	float2 s = Tap(centre, dims, false);

@@ -17,10 +17,10 @@ cbuffer HeightProcessCB : register(b0)
 	float padRimStep;
 	float padOverheadIgnore;
 
-	float ShelterBandHeight;
+	float padShelterBandHeight;
 	float padDiffuseLambda;
-	float ShelterMaxHeight;
-	float ShelterConeTan;
+	float padShelterMaxHeight;
+	float padShelterConeTan;
 
 	uint HeightProcessKeeper;
 	uint DeadGhostTiles;
@@ -32,6 +32,13 @@ cbuffer HeightProcessCB : register(b0)
 #define SHELTER_CONE_MAX_TEXELS 160.0
 #define SHELTER_CONE_LO 0.5
 #define SHELTER_CONE_HI 0.85
+
+// A roof higher than this above the ground no longer keeps the snow off.
+static const float kShelterMaxHeight = 275.0;
+// Cover up to this high counts toward enclosure.
+static const float kShelterBandHeight = max(250.0, kShelterMaxHeight);
+// tan(30 degrees): how far from straight down the snow blows in under cover.
+static const float kShelterConeTan = 0.577350259;
 
 cbuffer GhostCB : register(b2)
 {
@@ -118,7 +125,7 @@ uint ScrollTexel(uint2 texel, uint2 dims)
 
 	OutA[dtid.xy] = top;
 	OutB[dtid.xy] = bottom;
-	bool dead = DeadGhostTiles != 0 && bottom - top > ShelterBandHeight + 61.0;
+	bool dead = DeadGhostTiles != 0 && bottom - top > kShelterBandHeight + 61.0;
 	return (top > -50000.0 && bottom < 50000.0 && !dead) ? 1u : 0u;
 }
 
@@ -132,7 +139,7 @@ float2 ShelterTap(int2 p, int2 dims, float terrain)
 		float bottom = InB[p];
 		float clearance = bottom - terrain;
 		float floating = smoothstep(20.0, 60.0, clearance) * smoothstep(40.0, 80.0, top - terrain);
-		result = floating * (1.0 - smoothstep(float2(ShelterMaxHeight, ShelterBandHeight), float2(ShelterMaxHeight, ShelterBandHeight) + 100.0, clearance));
+		result = floating * (1.0 - smoothstep(float2(kShelterMaxHeight, kShelterBandHeight), float2(kShelterMaxHeight, kShelterBandHeight) + 100.0, clearance));
 	}
 	return result;
 }
@@ -150,7 +157,7 @@ float ShelterEnclosure(int2 texel, int2 dims, float terrain)
 		float2(-0.208, -0.139), float2(-0.049, -0.245), float2(0.139, -0.208), float2(0.245, -0.049)
 	};
 	float texelSize = HeightHalfExtent * 2.0 / dims.x;
-	float radius = clamp(ShelterBandHeight * ShelterConeTan / texelSize, SHELTER_RING_TEXELS, SHELTER_CONE_MAX_TEXELS);
+	float radius = clamp(kShelterBandHeight * kShelterConeTan / texelSize, SHELTER_RING_TEXELS, SHELTER_CONE_MAX_TEXELS);
 
 	float covered = ShelterTap(texel, dims, terrain).y * 2.0;
 	[loop] for (uint tapI = 0; tapI < 32; tapI++)

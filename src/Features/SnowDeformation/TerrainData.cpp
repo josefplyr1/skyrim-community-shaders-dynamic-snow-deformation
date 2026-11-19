@@ -139,7 +139,7 @@ void SnowDeformation::ResolveLandTextureDepthLocked(LandTextureEntry& a_entry)
 	a_entry.overridden = it != settings.TextureDepths.end();
 	a_entry.depth = a_entry.overridden ? it->second :
 	                a_entry.shipped    ? a_entry.shippedDepth :
-	                                     settings.SnowClassDepths[a_entry.classIndex];
+	                                     kSnowClassDepths[a_entry.classIndex];
 }
 
 void SnowDeformation::ResolveLandTextureDepthsLocked()
@@ -958,14 +958,12 @@ void SnowDeformation::FillShellWindowFromHeightmap()
 	cbData.HeightMapScale = { 1.0f / (heightmap->pos1.x - heightmap->pos0.x), 1.0f / (heightmap->pos1.y - heightmap->pos0.y) };
 	cbData.HeightMapOffset = { -heightmap->pos0.x * cbData.HeightMapScale.x, -heightmap->pos0.y * cbData.HeightMapScale.y };
 	cbData.HeightRange = { heightmap->pos0.z, heightmap->pos1.z };
-	cbData.SnowDepthUnits = std::max(settings.SnowClassDepths[3], 0.0f);
 
 	constexpr int kTileCells = 32;
 	const int tileX0 = (int)std::floor((float)shellWindowCellX / kTileCells) * kTileCells;
 	const int tileY0 = (int)std::floor((float)shellWindowCellY / kTileCells) * kTileCells;
 	cbData.LODTileBase = { tileX0 * cellSize, tileY0 * cellSize };
 	cbData.LODTileSpan = kTileCells * cellSize;
-	cbData.LODSnowSensitivity = std::clamp(settings.LODSnowSensitivity, 0.0f, 1.0f);
 	ID3D11ShaderResourceView* tileSRVs[4] = {};
 	for (int tileI = 0; tileI < 4; ++tileI) {
 		tileSRVs[tileI] = GetLODTile(heightmap->worldspace, tileX0 + (tileI & 1) * kTileCells, tileY0 + (tileI >> 1) * kTileCells);
@@ -1528,7 +1526,7 @@ void SnowDeformation::ClampCameraAboveSnow()
 {
 	auto* camera = RE::PlayerCamera::GetSingleton();
 	auto* player = globals::game::player;
-	if (!settings.CameraAboveSnow || !settings.EnableSnowDeformation || !player || !player->Is3DLoaded())
+	if (!settings.EnableSnowDeformation || !player || !player->Is3DLoaded())
 		return;
 	if (!camera || !camera->cameraRoot || !camera->currentState)
 		return;
@@ -1541,7 +1539,7 @@ void SnowDeformation::ClampCameraAboveSnow()
 		return;
 	auto* root = camera->cameraRoot.get();
 	const RE::NiPoint3 cam = root->world.translate;
-	const float clearance = 24.0f + std::clamp(settings.UndulationStrength, 0.0f, 32.0f);
+	constexpr float clearance = 24.0f + kUndulationStrength;
 	float surface;
 	if (!SampleShellSurface(cam.x, cam.y, surface)) {
 		return;

@@ -388,7 +388,7 @@ float ShellSurfaceZ(float2 gridLocal, out float coverage, out float terrainHeigh
 			float uncarved = depth;
 			depth = CarveProfile(deformation, bermPair.y, uncarved, GridOrigin + gridLocal, TrackCarveLook(TrackAgeOf(bermPair.z)));
 #ifndef SNOW_SURFACE_NO_BERM
-			depth += BermShape(bermD) * saturate(1.0 - deformation) * uncarved * BermHeightAmp * BermDepthGate(uncarved) * TrackBermScale(TrackAgeOf(bermPair.w));
+			depth += BermShape(bermD) * saturate(1.0 - deformation) * uncarved * kBermHeight * BermDepthGate(uncarved) * TrackBermScale(TrackAgeOf(bermPair.w));
 #endif
 			depth += UndulationSampled(GridOrigin + gridLocal) * saturate(depth / 8.0);
 		}
@@ -412,13 +412,13 @@ float2 ShellVertexSlope(float2 gridLocal)
 
 #define SHELL_TERRAIN_NORMAL(slopeX, slopeY) normalize(float3(-(slopeX) / 64.0, -(slopeY) / 64.0, 1.0))
 
-#define SHELL_DRAPE(position, footXY, z, terrainHeight, terrainNormal)                                      \
-	[branch] if (SlopeDrape.x > 0.001 && (z) > (terrainHeight))                                             \
-	{                                                                                                       \
-		float drapeAbove = (z) - (terrainHeight);                                                           \
-		float drapeTilt = SlopeDrape.x * (1.0 - smoothstep(SlopeDrape.y, SlopeDrape.z, (terrainNormal).z)); \
-		float3 drapeDir = normalize(lerp(float3(0.0, 0.0, 1.0), (terrainNormal), drapeTilt));               \
-		position = float3((footXY), (terrainHeight)) + drapeDir * drapeAbove;                               \
+#define SHELL_DRAPE(position, footXY, z, terrainHeight, terrainNormal)                        \
+	[branch] if ((z) > (terrainHeight))                                                       \
+	{                                                                                         \
+		float drapeAbove = (z) - (terrainHeight);                                             \
+		float drapeTilt = 1.0 - smoothstep(0.5, 0.866, (terrainNormal).z);                    \
+		float3 drapeDir = normalize(lerp(float3(0.0, 0.0, 1.0), (terrainNormal), drapeTilt)); \
+		position = float3((footXY), (terrainHeight)) + drapeDir * drapeAbove;                 \
 	}
 
 #define SHELL_CAST_VIS(castVis, gridLocal, z, coverage)                                                                               \
@@ -867,7 +867,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		bermCenter = 0.25 * (bermXP + bermXN + bermYP + bermYN);
 	}
 	float2 macroGrad = -terrainNormal.xy / max(terrainNormal.z, 0.1);
-	float2 gradZ = macroGrad + profileGrad + bermGrad * pixelDepth * BermHeightAmp * BermDepthGate(pixelDepth);
+	float2 gradZ = macroGrad + profileGrad + bermGrad * pixelDepth * kBermHeight * BermDepthGate(pixelDepth);
 
 	float2 worldXYPS = GridOrigin + gridLocal;
 	float undScale = saturate(pixelDepth / 8.0);
@@ -886,26 +886,23 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	const float2 detailPlane = gradZ;
 	float3 shadePos = input.WorldPos;
 #			if defined(SNOW_NOISE_TABLE)
-	[branch] if (!pixelUntouched && detailFade > 0.0 && (TrenchDetailRelief > 0.001 || abs(TrenchDetailRoughness - 1.0) > 0.001))
+	[branch] if (!pixelUntouched && detailFade > 0.0 && TrenchDetailRelief > 0.001)
 	{
 		const float4 detailField = BermFieldPair(gridLocal);
 		const float detailReach = detailFade;
-		detailMask = TrenchDetailMask(pixelCarve, detailField.xy, TrenchDetailCoverage) * detailReach;
-		[branch] if (detailMask > 0.0 || SpeedSpoil > 0.5)
+		detailMask = TrenchDetailMask(pixelCarve, detailField.xy, kTrenchDetailCoverage) * detailReach;
+		const float2 marks = SampleDetailMarks(gridLocal);
+		detailMask = max(detailMask, TrenchSpoilMask(marks.y) * detailReach);
+		[branch] if (detailMask > 0.0)
 		{
-			const float2 marks = SampleDetailMarks(gridLocal);
-			detailMask = max(detailMask, SpeedSpoil * TrenchSpoilMask(marks.y) * detailReach);
-			[branch] if (detailMask > 0.0)
-			{
-				const float meltWet = max(smoothstep(kSpellMarkStart, 0.15, marks.x), smoothstep(0.1, 0.4, pixelMelt));
-				const float detailAge = lerp(TrackAgeOf(detailField.w), TrackAgeOf(detailField.z), saturate(10.0 * pixelCarve));
-				const float impact = marks.y * TrackDetailImpactScale(detailAge);
-				detailImpact = max(meltWet, impact);
-				detailRelief = TrenchDetailRelief * detailMask * max(saturate(pixelDepth / 10.0), meltWet) * TrampleDetailScale(worldXYPS, pixelCarve) *
-				               (1.0 + kImpactReliefBoost * impact) * TrackDetailReliefScale(detailAge);
-				detailTaps = TrenchDetailTapsAt(worldXYPS);
-				detailLod = TrenchDetailLod(gDeferredGridDx, gDeferredGridDy);
-			}
+			const float meltWet = max(smoothstep(kSpellMarkStart, 0.15, marks.x), smoothstep(0.1, 0.4, pixelMelt));
+			const float detailAge = lerp(TrackAgeOf(detailField.w), TrackAgeOf(detailField.z), saturate(10.0 * pixelCarve));
+			const float impact = marks.y * TrackDetailImpactScale(detailAge);
+			detailImpact = max(meltWet, impact);
+			detailRelief = TrenchDetailRelief * detailMask * max(saturate(pixelDepth / 10.0), meltWet) * TrampleDetailScale(worldXYPS, pixelCarve) *
+			               (1.0 + kImpactReliefBoost * impact) * TrackDetailReliefScale(detailAge);
+			detailTaps = TrenchDetailTapsAt(worldXYPS);
+			detailLod = TrenchDetailLod(gDeferredGridDx, gDeferredGridDy);
 		}
 	}
 	[branch] if (detailRelief > 0.05)
@@ -985,7 +982,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 	float3 snowF0 = kSnowF0;
 	float snowAO = 1.0;
 	SNOW_RMAOS(snowRoughness, snowF0, snowAO, snowTaps, snowTapsSide, snowSteepness)
-	snowRoughness = clamp(snowRoughness * lerp(1.0, TrenchDetailRoughness, detailMask), 0.05, 1.0);
+	snowRoughness = clamp(snowRoughness, 0.05, 1.0);
 
 	snowRoughness *= 1.0 - wetLook.x;
 	const float glintsLeft = wetLook.y;
@@ -1213,7 +1210,7 @@ float MarchTapHeight(float2 a_gridLocal)
 	const float deform = SampleDeformationFast(gridLocal);
 	const float4 berm = BermBakeActive > 0.5 ? BermFieldBaked(gridLocal) : float4(0.0, deform, TrackAge.x, TrackAge.x);
 	depth = CarveProfileNoTeeth(deform, berm.y, depth, TrackCarveLook(TrackAgeOf(berm.z))) +
-	        BermShape(berm.x) * saturate(1.0 - deform) * depth * BermHeightAmp * BermDepthGate(depth) * TrackBermScale(TrackAgeOf(berm.w));
+	        BermShape(berm.x) * saturate(1.0 - deform) * depth * kBermHeight * BermDepthGate(depth) * TrackBermScale(TrackAgeOf(berm.w));
 	return st.x + depth + Undulation(GridOrigin + gridLocal) * saturate(depth / 8.0);
 }
 

@@ -19,15 +19,9 @@ void SnowDeformation::TickAccumulation()
 		accumWeatherIntensity.store(std::clamp(snowfallIntensity, 0.0f, 1.0f), std::memory_order_relaxed);
 
 	const float intensity = accumWeatherIntensity.load(std::memory_order_relaxed);
-	const float growth = settings.AccumulationHours > 0.01f ?
-	                         intensity / settings.AccumulationHours :
-	                         0.0f;
-	const float melt = settings.AccumulationMeltHours > 0.01f ?
-	                       (1.0f - intensity) / settings.AccumulationMeltHours :
-	                       0.0f;
-	const float fade = settings.AccumulationFadeDays > 0.01f ?
-	                       1.0f / (settings.AccumulationFadeDays * 24.0f) :
-	                       0.0f;
+	const float growth = intensity / kAccumulationHours;
+	const float melt = (1.0f - intensity) / kAccumulationMeltHours;
+	constexpr float fade = 1.0f / (kAccumulationFadeDays * 24.0f);
 
 	const float current = snowAccumulation.load(std::memory_order_relaxed);
 	snowAccumulation.store(std::clamp(current + elapsed * (growth - melt - fade), 0.0f, 1.0f),
@@ -39,13 +33,7 @@ float SnowDeformation::GetAccumulationDepthScale() const
 	if (!settings.EnableSnowAccumulation)
 		return 1.0f;
 
-	const float peak = std::max(settings.AccumulationPeak, 1.0f);
-	return 1.0f + snowAccumulation.load(std::memory_order_relaxed) * (peak - 1.0f);
-}
-
-float SnowDeformation::GetSnowSoftness() const
-{
-	return 0.0f;
+	return 1.0f + snowAccumulation.load(std::memory_order_relaxed) * (kAccumulationPeak - 1.0f);
 }
 
 void SnowDeformation::TickSnowClimate()
@@ -87,14 +75,4 @@ float SnowDeformation::SnowWetIceStrength() const
 float4 SnowDeformation::TrackAgeConstants() const
 {
 	return { snowClimate.ageingClock, 0.0f, 0.0f, 0.0f };
-}
-
-SnowDeformation::SnowCondition SnowDeformation::GetSnowCondition() const
-{
-	return {};
-}
-
-SnowDeformation::SnowClimateLook SnowDeformation::ComputeSnowClimateLook() const
-{
-	return {};
 }
