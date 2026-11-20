@@ -1,7 +1,5 @@
 #include "Features/SnowDeformation.h"
 
-#include <DDSTextureLoader.h>
-
 #include "Deferred.h"
 #include "Features/CloudShadows.h"
 #include "Features/ExponentialHeightFog.h"
@@ -16,6 +14,7 @@
 #include "TruePBR.h"
 #include "Utils/D3D.h"
 #include "Utils/Game.h"
+#include "Utils/UI.h"
 
 void SnowDeformation::CopySRVResource(ID3D11ShaderResourceView* a_srcSRV, const char* a_name,
 	winrt::com_ptr<ID3D11Texture2D>& a_tex, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv, const D3D11_BOX* a_box, const D3D11_BOX* a_extent)
@@ -76,44 +75,18 @@ bool SnowDeformation::LoadGameDDS(const std::string& a_dataRelativePath, winrt::
 		return false;
 
 	std::string path = a_dataRelativePath;
-	{
-		const size_t dot = path.find_last_of('.');
-		const size_t sep = path.find_last_of("\\/");
-		if (dot == std::string::npos || (sep != std::string::npos && dot < sep))
-			path += ".dds";
-	}
-	auto nameLoaded = [&a_srv, &path] {
-		winrt::com_ptr<ID3D11Resource> texture;
-		a_srv->GetResource(texture.put());
-		Util::SetResourceName(texture.get(), "SnowDeformation::%s", path.c_str());
-	};
-
-	RE::BSResourceNiBinaryStream stream(path);
-	if (stream.good() && stream.stream) {
-		const uint32_t total = stream.stream->totalSize;
-		if (total > 0) {
-			std::vector<uint8_t> bytes(total);
-			if (stream.read(reinterpret_cast<char*>(bytes.data()), total) &&
-				SUCCEEDED(DirectX::CreateDDSTextureFromMemory(globals::d3d::device, bytes.data(), bytes.size(),
-					nullptr, a_srv.put()))) {
-				logger::debug("SnowDeformation: loaded {} through the game ({} bytes)", a_dataRelativePath, total);
-				nameLoaded();
-				return true;
-			}
-		}
-		a_srv = nullptr;
-	}
-
-	const std::string diskPath = "Data\\" + path;
-	const std::wstring wide(diskPath.begin(), diskPath.end());
-	if (SUCCEEDED(DirectX::CreateDDSTextureFromFile(globals::d3d::device, wide.c_str(), nullptr, a_srv.put()))) {
-		logger::debug("SnowDeformation: loaded {} off disk", path);
-		nameLoaded();
-		return true;
-	}
-	a_srv = nullptr;
-	logger::debug("SnowDeformation: could not load {} from archives or disk", a_dataRelativePath);
-	return false;
+	const size_t dot = path.find_last_of('.');
+	const size_t sep = path.find_last_of("\\/");
+	if (dot == std::string::npos || (sep != std::string::npos && dot < sep))
+		path += ".dds";
+	ImVec2 size;
+	if (!Util::LoadDDSTextureFromFile(globals::d3d::device, path.c_str(), a_srv.put(), size, true))
+		return false;
+	winrt::com_ptr<ID3D11Resource> texture;
+	a_srv->GetResource(texture.put());
+	Util::SetResourceName(texture.get(), "SnowDeformation::%s", path.c_str());
+	Util::SetResourceName(a_srv.get(), "SnowDeformation::%s SRV", path.c_str());
+	return true;
 }
 
 void SnowDeformation::EnsureTrenchDetailTextures()
@@ -142,10 +115,6 @@ void SnowDeformation::EnsureShellSnowTextures()
 	shellSnowHeightSRV = nullptr;
 	shellSnowTextureIsPBR = false;
 
-	auto tryLoadDDS = [](const std::string& a_path, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv) {
-		return LoadGameDDS(a_path, a_srv);
-	};
-
 	std::string chosenPath = settings.SnowTexturePath.empty() ? "Textures\\Landscape\\snow01.dds" : settings.SnowTexturePath;
 	for (auto& pathChar : chosenPath)
 		if (pathChar == '/')
@@ -160,12 +129,12 @@ void SnowDeformation::EnsureShellSnowTextures()
 	else if (size_t texPos = loweredPath.find("textures\\"); texPos != std::string::npos)
 		pbrPath = chosenPath.substr(0, texPos + 9) + "PBR\\" + chosenPath.substr(texPos + 9);
 
-	if (!pbrPath.empty() && pbrPath.size() > 4 && tryLoadDDS(pbrPath, shellSnowDiffuseSRV)) {
+	if (!pbrPath.empty() && pbrPath.size() > 4 && LoadGameDDS(pbrPath, shellSnowDiffuseSRV)) {
 		shellSnowTextureIsPBR = true;
 		std::string base = pbrPath.substr(0, pbrPath.size() - 4);
-		bool hasNormal = tryLoadDDS(base + "_n.dds", shellSnowNormalSRV);
-		bool hasRmaos = tryLoadDDS(base + "_rmaos.dds", shellSnowRmaosSRV);
-		bool hasHeight = tryLoadDDS(base + "_p.dds", shellSnowHeightSRV);
+		bool hasNormal = LoadGameDDS(base + "_n.dds", shellSnowNormalSRV);
+		bool hasRmaos = LoadGameDDS(base + "_rmaos.dds", shellSnowRmaosSRV);
+		bool hasHeight = LoadGameDDS(base + "_p.dds", shellSnowHeightSRV);
 		logger::info("[SNOW DEFORMATION] PBR snow set: {} (normal={} rmaos={} height={})", pbrPath, hasNormal, hasRmaos, hasHeight);
 
 		snowGlintLogDensity = 6.0f;
@@ -225,11 +194,11 @@ void SnowDeformation::EnsureShellSnowTextures()
 		}
 	} else {
 		snowPBRSetName.clear();
-		bool ok = tryLoadDDS(chosenPath, shellSnowDiffuseSRV);
+		bool ok = LoadGameDDS(chosenPath, shellSnowDiffuseSRV);
 		if (!ok && chosenPath != "Textures\\Landscape\\snow01.dds") {
 			logger::info("[SNOW DEFORMATION] Snow diffuse not loose-file loadable: {}", chosenPath);
 			chosenPath = "Textures\\Landscape\\snow01.dds";
-			ok = tryLoadDDS(chosenPath, shellSnowDiffuseSRV);
+			ok = LoadGameDDS(chosenPath, shellSnowDiffuseSRV);
 		}
 		logger::info("[SNOW DEFORMATION] Snow diffuse load ({}): {}", ok ? "ok (legacy)" : "missing, using fallback color", chosenPath);
 	}
