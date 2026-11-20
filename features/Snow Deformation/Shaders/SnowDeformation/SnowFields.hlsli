@@ -446,13 +446,16 @@ float SnowPressed(float a_carve, float a_melt)
 	return smoothstep(0.1, 0.5, a_carve) * (1.0 - smoothstep(0.1, 0.4, a_melt));
 }
 
+// A print in dry cold snow at the snow climate's default strength (0.75) keeps a quarter of the wet look.
+static const float kDryWetPrint = 0.25;
+
 float SnowWetPrint(inout float3 a_albedo, float a_carve, float a_melt, float a_depth)
 {
 	float roughCut = 0.0;
 	const float wetPress = SnowPressed(a_carve, a_melt);
 	[branch] if (wetPress > 0.001 && a_depth < 6.0)
 	{
-		const float wetPrint = wetPress * (1.0 - smoothstep(1.5, 6.0, a_depth));
+		const float wetPrint = wetPress * (1.0 - smoothstep(1.5, 6.0, a_depth)) * kDryWetPrint;
 		a_albedo = lerp(a_albedo, a_albedo * float3(0.76, 0.77, 0.80), wetPrint);
 		roughCut = wetPrint * 0.24;
 	}
