@@ -4,4 +4,4 @@ float4 WorldRow2;
 
 float2 HeightWindowCenter;
 float HeightHalfExtent;
-float pad0;
+float padStatics;

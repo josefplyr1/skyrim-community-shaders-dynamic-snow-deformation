@@ -406,6 +406,24 @@ ID3D11PixelShader* SnowDeformation::GetShellPSDeferred()
 	return shellPSDeferred.get();
 }
 
+ID3D11VertexShader* SnowDeformation::GetDriftCoatVS()
+{
+	if (!driftCoatVS)
+		driftCoatVS.attach(static_cast<ID3D11VertexShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", { { "SNOW_DRIFT_COAT", "" } }, "vs_5_0")));
+	return driftCoatVS.get();
+}
+
+ID3D11PixelShader* SnowDeformation::GetDriftCoatPS()
+{
+	if (!driftCoatPS) {
+		auto defines = ShellPSDefines();
+		defines.emplace_back("SNOW_SHELL_DEFERRED", "");
+		defines.emplace_back("SNOW_DRIFT_COAT", "");
+		driftCoatPS.attach(static_cast<ID3D11PixelShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\SnowShell.hlsl", defines, "ps_5_0")));
+	}
+	return driftCoatPS.get();
+}
+
 ID3D11PixelShader* SnowDeformation::GetShellPSPrepassAttr(bool a_keepHidden)
 {
 	auto& slot = shellPSPrepassAttr[a_keepHidden ? 1 : 0];
@@ -1300,6 +1318,12 @@ void SnowDeformation::DrawShell()
 			context->PSSetShader(fillPS, nullptr, 0);
 			context->Draw(3, 0);
 			context->PSSetShaderResources(9, 1, nullResolveSRVs);
+		}
+		if (!driftCoats.empty()) {
+			splitRow("SnowDeformation::Ground - Drift Coat");
+			context->OMSetRenderTargets(8, rtvs, dsv);
+			DrawDriftCoats(context, cbData);
+			splitRow("SnowDeformation::Ground - Shell Shading");
 		}
 		context->OMSetRenderTargets(8, rtvs, shellTestDepthDSV.get());
 		context->OMSetDepthStencilState(shellDeferredDepthState.get(), 0);

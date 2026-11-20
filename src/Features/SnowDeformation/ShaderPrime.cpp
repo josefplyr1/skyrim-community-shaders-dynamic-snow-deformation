@@ -57,6 +57,8 @@ void SnowDeformation::RunShaderPrime()
 	};
 	const std::function<void()> objectSteps[] = {
 		[&] { EnsureHeightRasterShaders(); },
+		[&] { GetDriftCoatVS(); },
+		[&] { GetDriftCoatPS(); },
 	};
 	const std::function<void()> effectSteps[] = {
 		[] {},

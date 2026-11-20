@@ -657,6 +657,14 @@ public:
 	winrt::com_ptr<ID3D11PixelShader> shellPSDeferred;
 	ID3D11PixelShader* GetShellPSDeferred();
 
+	/** @brief Shades this frame's drift meshes as ground snow, with the deferred pass's own shading on their surface. Before that pass, which keeps the pixels the ground claimed. Implemented in SnowDeformation/Statics.cpp. */
+	void DrawDriftCoats(ID3D11DeviceContext* a_context, const ShellCB& a_cb);
+	winrt::com_ptr<ID3D11VertexShader> driftCoatVS;
+	winrt::com_ptr<ID3D11PixelShader> driftCoatPS;
+	winrt::com_ptr<ID3D11DepthStencilState> driftCoatDepthState;
+	ID3D11VertexShader* GetDriftCoatVS();
+	ID3D11PixelShader* GetDriftCoatPS();
+
 	Texture2D* marchHeight[3] = {};
 	Texture2D* marchSunEnvelope = nullptr;
 	enum MarchCS : uint32_t
@@ -874,6 +882,12 @@ public:
 	};
 
 	std::vector<CapturedSnowStatic> capturedStatics;
+	struct DriftCoatDraw
+	{
+		RE::NiPointer<RE::BSGeometry> geometry;
+		RE::NiTransform world;
+	};
+	std::vector<DriftCoatDraw> driftCoats;
 	struct CapturedWater
 	{
 		RE::NiPointer<RE::BSGeometry> geometry;

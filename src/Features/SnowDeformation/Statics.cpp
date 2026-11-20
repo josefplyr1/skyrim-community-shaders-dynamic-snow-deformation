@@ -738,6 +738,8 @@ void SnowDeformation::BSLightingShader_SetupGeometry(RE::BSRenderPass* a_pass)
 	}
 
 	capturedStatics.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world, road || flags.any(Flag::kProjectedUV) || !fadeExempt });
+	if (fullCoat && !decalDepth && !alphaTested && !PassBlendsOver(a_pass))
+		driftCoats.push_back({ RE::NiPointer<RE::BSGeometry>(a_pass->geometry), a_pass->geometry->world });
 }
 
 struct SD_BSLightingShader_SetupGeometry
@@ -819,6 +821,65 @@ void SnowDeformation::CreateCaptureLayouts()
 		if (cap.makesLayout && cap.geometry && RigidDrawOf(cap.geometry.get(), draw))
 			StaticsInputLayoutFor(draw.descKey, draw.desc);
 	}
+}
+
+void SnowDeformation::DrawDriftCoats(ID3D11DeviceContext* a_context, const ShellCB& a_cb)
+{
+	if (driftCoats.empty() || SnowShadersPending(2) || globals::state->isMapMenuOpen || !EnsureHeightRasterShaders())
+		return;
+	auto* vs = GetDriftCoatVS();
+	auto* ps = GetDriftCoatPS();
+	if (!vs || !ps)
+		return;
+	if (!driftCoatDepthState) {
+		D3D11_DEPTH_STENCIL_DESC dsDesc{};
+		dsDesc.DepthEnable = TRUE;
+		dsDesc.DepthWriteMask = D3D11_DEPTH_WRITE_MASK_ZERO;
+		dsDesc.DepthFunc = D3D11_COMPARISON_LESS_EQUAL;
+		if (FAILED(globals::d3d::device->CreateDepthStencilState(&dsDesc, driftCoatDepthState.put())))
+			return;
+		Util::SetResourceName(driftCoatDepthState.get(), "SnowDeformation::DriftCoatDepthState");
+	}
+
+	a_context->OMSetDepthStencilState(driftCoatDepthState.get(), 0);
+	a_context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
+	a_context->RSSetState(shellRasterState.get());
+	a_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+	a_context->VSSetShader(vs, nullptr, 0);
+	a_context->HSSetShader(nullptr, nullptr, 0);
+	a_context->DSSetShader(nullptr, nullptr, 0);
+	a_context->PSSetShader(ps, nullptr, 0);
+	ID3D11Buffer* vsCBs[2] = { shellCB->CB(), staticsCB->CB() };
+	a_context->VSSetConstantBuffers(0, 2, vsCBs);
+
+	SD_DrawBinds binds;
+	for (const auto& drift : driftCoats) {
+		RigidDraw draw;
+		if (!drift.geometry || !RigidDrawOf(drift.geometry.get(), draw))
+			continue;
+		auto* layout = StaticsInputLayoutFor(draw.descKey, draw.desc);
+		const UINT stride = uint32_t(draw.descKey & 0xF) * 4;
+		if (!layout || stride == 0)
+			continue;
+		StaticsCB scb{};
+		SetWorldRows(drift.world, scb);
+		scb.WorldRow0.w -= a_cb.CameraPosAdjust.x;
+		scb.WorldRow1.w -= a_cb.CameraPosAdjust.y;
+		scb.WorldRow2.w -= a_cb.CameraPosAdjust.z;
+		staticsCB->Update(scb);
+		binds.Layout(a_context, layout);
+		binds.Vertex(a_context, draw.vb, stride);
+		binds.Index(a_context, draw.ib, DXGI_FORMAT_R16_UINT);
+		a_context->DrawIndexed(draw.indexCount, 0, 0);
+	}
+
+	ID3D11Buffer* nullCB = nullptr;
+	a_context->VSSetConstantBuffers(1, 1, &nullCB);
+	a_context->IASetInputLayout(nullptr);
+	ID3D11Buffer* nullVB = nullptr;
+	const UINT zero = 0;
+	a_context->IASetVertexBuffers(0, 1, &nullVB, &zero, &zero);
+	a_context->IASetIndexBuffer(nullptr, DXGI_FORMAT_R16_UINT, 0);
 }
 
 void SnowDeformation::CreateHeightFieldResources()

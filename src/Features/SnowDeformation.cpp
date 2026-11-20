@@ -672,6 +672,7 @@ void SnowDeformation::PrepassSimulation()
 	const size_t capturedLast = capturedStatics.size();
 	capturedStatics.clear();
 	capturedStaticsSet.clear();
+	driftCoats.clear();
 	capturedStaticsSet.reserve(capturedLast);
 
 	UpdateActiveWorldspace();
@@ -1313,7 +1314,7 @@ void SnowDeformation::ClearShaderCache()
 	for (auto& key : heightRasterKey)
 		key.clear();
 	auto release = [](auto&... a_shaders) { ((a_shaders = nullptr), ...); };
-	release(shellPSDeferred, shellPSPrepassEarly, shellPSEarlyResolve, shellFillVS, shellFillPS, shellFillPSClaim);
+	release(shellPSDeferred, shellPSPrepassEarly, shellPSEarlyResolve, shellFillVS, shellFillPS, shellFillPSClaim, driftCoatVS, driftCoatPS);
 	release(heightVS, heightPS, heightScrollRasterCS, heightCombineCS);
 }
 

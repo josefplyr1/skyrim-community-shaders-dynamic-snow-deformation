@@ -488,6 +488,44 @@ float ShellVertexZ(float2 gridLocal, out float coverage, out float terrainHeight
 }
 #endif
 
+#if defined(VSHADER) && defined(SNOW_DRIFT_COAT)
+cbuffer StaticCB : register(b1)
+{
+#	include "SnowDeformation/StaticCBFields.hlsli"
+};
+
+struct DRIFT_VS_INPUT
+{
+	float4 Position: POSITION0;
+	float4 Normal: NORMAL0;
+};
+
+// Toward the eye along the view ray: the drift's own pixels, just in front of its depth.
+static const float kDriftCoatLift = 0.1;
+
+// WorldRow*.w hold the translation relative to ShellCameraPosAdjust.
+VS_OUTPUT main(DRIFT_VS_INPUT input)
+{
+	const float3 posMS = input.Position.xyz;
+	const float3 nrmMS = input.Normal.xyz * 2.0 - 1.0;
+	float3 rel = float3(
+		dot(WorldRow0.xyz, posMS) + WorldRow0.w,
+		dot(WorldRow1.xyz, posMS) + WorldRow1.w,
+		dot(WorldRow2.xyz, posMS) + WorldRow2.w);
+	rel -= normalize(rel) * kDriftCoatLift;
+	const float3 normalWS = normalize(float3(dot(WorldRow0.xyz, nrmMS), dot(WorldRow1.xyz, nrmMS), dot(WorldRow2.xyz, nrmMS)));
+
+	VS_OUTPUT vsout;
+	vsout.Position = mul(CameraViewProj, float4(rel, 1.0));
+	vsout.CurrentClip = mul(CameraViewProjUnjittered, float4(rel, 1.0));
+	vsout.PreviousClip = mul(CameraPreviousViewProjUnjittered, float4(rel + ShellCameraPosAdjust.xyz - ShellCameraPreviousPosAdjust.xyz, 1.0));
+	vsout.WorldPos = rel;
+	vsout.GridLocal = rel.xy + ShellCameraPosAdjust.xy - GridOrigin;
+	vsout.TerrainNormalAlpha = float4(normalWS, 1.0);
+	return vsout;
+}
+#endif
+
 #ifdef PSHADER
 
 struct PS_OUTPUT
@@ -662,6 +700,15 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 {
 	float2 motionVector = float2(-0.5, 0.5) * (input.CurrentClip.xy / input.CurrentClip.w - input.PreviousClip.xy / input.PreviousClip.w);
 
+#		ifdef SNOW_DRIFT_COAT
+	float2 gridLocal = input.GridLocal;
+	const float shellZ = input.CurrentClip.w;
+	const float sceneZ = shellZ;
+	const float screenNoise = Random::InterleavedGradientNoise(input.Position.xy, SharedData::FrameCount);
+	const float coverageAlpha = 1.0;
+	const float pixelCarve = 0.0;
+	const float pixelMelt = saturate(SampleExclusionMask(GridOrigin + gridLocal).y);
+#		else
 	float2 gridLocal = input.GridLocal;
 	float rawSceneDepth = SceneDepth.Load(int3(input.Position.xy, 0));
 	float sceneZ = ShellSceneViewDepth(rawSceneDepth);
@@ -770,6 +817,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 #		endif
 
 	float exportEffDepth = lerp(pixelEffDepth, min(pixelEffDepth, kFireMeltFloor), pixelMelt);
+#		endif
 #		ifdef SNOW_SHELL_DEPTH_PREPASS
 	PS_PREPASS_OUTPUT prepassOut;
 	prepassOut.RasterDepth = input.Position.z;
@@ -792,6 +840,20 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 #		endif
 #		ifndef SNOW_SHELL_DEPTH_PREPASS
 
+#			ifdef SNOW_DRIFT_COAT
+	// A drift is a pile of the deepest snow class: no carve, no trench detail, its own normal.
+	const float pixelDepth = 30.0;
+	float2 worldXYPS = GridOrigin + gridLocal;
+	const float detailRelief = 0.0;
+	const TrenchDetailTaps detailTaps = (TrenchDetailTaps)0;
+	const float detailLod = 0.0;
+	const float detailHitH = 0.0;
+	const float detailImpact = 0.0;
+	const float2 detailPlane = 0.0;
+	float3 shadePos = input.WorldPos;
+	float3 normalWS = normalize(input.TerrainNormalAlpha.xyz);
+	const float3 frameNormalWS = normalWS;
+#			else
 	float3 terrainNormal = normalize(input.TerrainNormalAlpha.xyz);
 	float pixelDepth = max(TouchDownToe(pixelRampDepth), 0.0);
 	pixelDepth = lerp(pixelDepth, min(pixelDepth, kFireMeltFloor), pixelMelt);
@@ -883,6 +945,7 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 
 	float3 normalWS = normalize(float3(gradZ * -1.0, 1.0));
 	const float3 frameNormalWS = normalize(float3(-detailPlane, 1.0));
+#			endif
 
 	float bumpFade = 1.0 - smoothstep(600.0, 2200.0, shellZ);
 	float2 snowUV = (SnowUVOffset + gridLocal) / kSnowUVTile;
@@ -995,7 +1058,11 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 		}
 	}
 
+#			ifdef SNOW_DRIFT_COAT
+	const bool sssSeesSnow = ScreenSpaceShadowsActive > 0.5;
+#			else
 	const bool sssSeesSnow = ScreenSpaceShadowsActive > 1.5;
+#			endif
 	[branch] if (sssSeesSnow && !SharedData::InInterior && dot(normalWS, L) >= 0.0)
 		sunShadow *= ScreenSpaceShadows::GetScreenSpaceShadow(input.Position.xyz, float2(0.0, 0.0), 0.0);
 
@@ -1104,7 +1171,16 @@ PS_PREPASS_OUTPUT main(VS_OUTPUT input)
 #		endif
 }
 
-#		ifdef SNOW_SHELL_DEFERRED
+#		if defined(SNOW_DRIFT_COAT)
+PS_OUTPUT main(VS_OUTPUT input)
+{
+	gDeferredGridDx = ddx_coarse(input.GridLocal);
+	gDeferredGridDy = ddy_coarse(input.GridLocal);
+	gDeferredZDx = ddx_coarse(input.WorldPos.z);
+	gDeferredZDy = ddy_coarse(input.WorldPos.z);
+	return ShellShade(input);
+}
+#		elif defined(SNOW_SHELL_DEFERRED)
 Texture2D<float4> DeferredGrid : register(t91);
 Texture2D<float4> DeferredGridDeriv : register(t92);
 Texture2D<float4> DeferredDepth : register(t93);
