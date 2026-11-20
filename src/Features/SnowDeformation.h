@@ -768,7 +768,7 @@ public:
 
 	ConstantBuffer* shellCB = nullptr;
 
-	/** @brief Loads a DDS through the GAME's resource system, so archives resolve and a modlist override still wins. Shared by the snow and trench detail textures - a second copy would drift. */
+	/** @brief Loads a single 2D DDS through the GAME's resource system, so archives resolve and a modlist override still wins. */
 	static bool LoadGameDDS(const std::string& a_dataRelativePath, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv);
 	winrt::com_ptr<ID3D11RasterizerState> shellRasterState;
 	winrt::com_ptr<ID3D11DepthStencilState> shellDepthState;

@@ -94,8 +94,17 @@ void SnowDeformation::EnsureTrenchDetailTextures()
 	if (trenchDetailAttempted)
 		return;
 	trenchDetailAttempted = true;
-	if (!LoadGameDDS("Shaders\\SnowDeformation\\TrenchDetailN.dds", trenchDetailNormalSRV) ||
-		!LoadGameDDS("Shaders\\SnowDeformation\\TrenchDetailH.dds", trenchDetailHeightSRV)) {
+	// Two-slice arrays, which LoadGameDDS's loader refuses.
+	auto load = [](const char* a_name, winrt::com_ptr<ID3D11ShaderResourceView>& a_srv) {
+		winrt::com_ptr<ID3D11Texture2D> texture;
+		if (FAILED(Util::LoadTextureFromFile(globals::d3d::device, std::format("Data\\Shaders\\SnowDeformation\\{}.dds", a_name),
+				texture.put(), a_srv.put())))
+			return false;
+		Util::SetResourceName(texture.get(), "SnowDeformation::%s", a_name);
+		Util::SetResourceName(a_srv.get(), "SnowDeformation::%s SRV", a_name);
+		return true;
+	};
+	if (!load("TrenchDetailN", trenchDetailNormalSRV) || !load("TrenchDetailH", trenchDetailHeightSRV)) {
 		trenchDetailNormalSRV = nullptr;
 		trenchDetailHeightSRV = nullptr;
 		logger::info("[SNOW DEFORMATION] trench detail textures not found; the trench detail stays off");
