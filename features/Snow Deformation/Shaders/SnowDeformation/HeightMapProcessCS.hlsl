@@ -269,27 +269,3 @@ static const float kWaterNearMax = 3.0;
 				nearSq = min(nearSq, (uint)(i * i + j * j));
 	WaterNearOut[dtid.xy] = nearSq;
 }
-
-#ifdef RASTER_COMPARE
-Texture2D<float4> CompareKept : register(t8);
-Texture2D<float4> CompareFresh : register(t9);
-RWByteAddressBuffer CompareCount : register(u4);
-
-[numthreads(8, 8, 1)] void RasterCompareCS(uint3 dtid : SV_DispatchThreadID) {
-	uint2 dims;
-	CompareKept.GetDimensions(dims.x, dims.y);
-	if (any(dtid.xy >= dims))
-		return;
-	float4 kept = CompareKept[dtid.xy];
-	float4 fresh = CompareFresh[dtid.xy];
-	if (all(asuint(kept) == asuint(fresh)))
-		return;
-	uint prior;
-	CompareCount.InterlockedAdd(0, 1u, prior);
-	if (prior >= 8u)
-		return;
-	uint base = 16u + prior * 32u;
-	CompareCount.Store4(base, uint4((dtid.y << 16) | dtid.x, asuint(kept.x), asuint(kept.y), asuint(fresh.x)));
-	CompareCount.Store4(base + 16u, uint4(asuint(fresh.y), 0u, 0u, 0u));
-}
-#endif

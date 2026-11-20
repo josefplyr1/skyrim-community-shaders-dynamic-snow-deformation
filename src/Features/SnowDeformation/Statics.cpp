@@ -836,95 +836,6 @@ void SnowDeformation::CreateHeightFieldResources()
 	heightTileEmpty = SD_MakeTexture2D(kHeightMapDim / 8, kHeightMapDim / 8, DXGI_FORMAT_R8_UINT, "SnowDeformation::HeightTileEmpty");
 }
 
-static constexpr UINT kHeightVerifySamples = 8;
-static constexpr UINT kHeightVerifySlotWords = 4 + kHeightVerifySamples * 8;
-static_assert(kHeightVerifySlotWords * sizeof(uint32_t) % D3D11_RAW_UAV_SRV_BYTE_ALIGNMENT == 0);
-static constexpr UINT kHeightVerifySlots = 7;
-static constexpr UINT kHeightVerifyRasterSlots = 1;
-static constexpr uint32_t kHeightVerifyTargetLevel[kHeightVerifySlots] = { 0, 0, 1, 2, 3, 4, 5 };
-
-bool SnowDeformation::EnsureHeightRasterVerify()
-{
-	if (heightRasterVerifyStaging[2] && heightRasterCompareCS)
-		return true;
-	auto device = globals::d3d::device;
-	if (!heightRasterCompareCS)
-		heightRasterCompareCS.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(L"Data\\Shaders\\SnowDeformation\\HeightMapProcessCS.hlsl", { { "RASTER_COMPARE", "" } }, "cs_5_0", "RasterCompareCS")));
-	if (!heightRasterCompareCS || !heightRaster)
-		return false;
-	Texture2D* const twins[kHeightVerifyRasterSlots] = { heightRaster };
-	static constexpr const char* kNames[kHeightVerifyRasterSlots] = { "SnowDeformation::HeightVerifyRaster" };
-	for (UINT i = 0; i < kHeightVerifyRasterSlots; i++) {
-		if (heightRasterVerifyTex[i])
-			continue;
-		D3D11_TEXTURE2D_DESC desc = twins[i]->desc;
-		desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-		D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = { .Format = desc.Format, .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D, .Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 } };
-		D3D11_RENDER_TARGET_VIEW_DESC rtvDesc = { .Format = desc.Format, .ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D, .Texture2D = { .MipSlice = 0 } };
-		heightRasterVerifyTex[i] = new Texture2D(desc, kNames[i]);
-		heightRasterVerifyTex[i]->CreateSRV(srvDesc);
-		heightRasterVerifyTex[i]->CreateRTV(rtvDesc);
-	}
-	if (!heightRasterVerifyCount) {
-		D3D11_BUFFER_DESC countDesc{};
-		countDesc.ByteWidth = kHeightVerifySlots * kHeightVerifySlotWords * sizeof(uint32_t);
-		countDesc.Usage = D3D11_USAGE_DEFAULT;
-		countDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
-		countDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
-		winrt::com_ptr<ID3D11Buffer> count;
-		winrt::com_ptr<ID3D11UnorderedAccessView> allUAV, slotUAVs[kHeightVerifySlots];
-		if (FAILED(device->CreateBuffer(&countDesc, nullptr, count.put())))
-			return false;
-		Util::SetResourceName(count.get(), "SnowDeformation::HeightVerifyCount");
-		D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
-		uavDesc.Format = DXGI_FORMAT_R32_TYPELESS;
-		uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
-		uavDesc.Buffer.Flags = D3D11_BUFFER_UAV_FLAG_RAW;
-		uavDesc.Buffer.NumElements = kHeightVerifySlots * kHeightVerifySlotWords;
-		if (FAILED(device->CreateUnorderedAccessView(count.get(), &uavDesc, allUAV.put())))
-			return false;
-		uavDesc.Buffer.NumElements = kHeightVerifySlotWords;
-		for (UINT slot = 0; slot < kHeightVerifySlots; slot++) {
-			uavDesc.Buffer.FirstElement = slot * kHeightVerifySlotWords;
-			if (FAILED(device->CreateUnorderedAccessView(count.get(), &uavDesc, slotUAVs[slot].put())))
-				return false;
-		}
-		Util::SetResourceName(count.get(), "SnowDeformation::HeightVerifyCount");
-		heightRasterVerifyCount = count;
-		heightRasterVerifyAllUAV = allUAV;
-		for (UINT slot = 0; slot < kHeightVerifySlots; slot++)
-			heightRasterVerifySlotUAV[slot] = slotUAVs[slot];
-	}
-	for (int i = 0; i < 3; i++) {
-		if (heightRasterVerifyStaging[i])
-			continue;
-		D3D11_BUFFER_DESC stagingDesc{};
-		stagingDesc.ByteWidth = kHeightVerifySlots * kHeightVerifySlotWords * sizeof(uint32_t);
-		stagingDesc.Usage = D3D11_USAGE_STAGING;
-		stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-		if (FAILED(device->CreateBuffer(&stagingDesc, nullptr, heightRasterVerifyStaging[i].put())))
-			return false;
-		Util::SetResourceName(heightRasterVerifyStaging[i].get(), "SnowDeformation::HeightVerifyStaging");
-	}
-	return true;
-}
-
-bool SnowDeformation::EnsureCombineVerify()
-{
-	if (combineVerifyTex)
-		return true;
-	if (!heightBottomFiltered)
-		return false;
-	D3D11_TEXTURE2D_DESC desc = heightBottomFiltered->desc;
-	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-	D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc = { .Format = desc.Format, .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D, .Texture2D = { .MostDetailedMip = 0, .MipLevels = 1 } };
-	D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc = { .Format = desc.Format, .ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D, .Texture2D = { .MipSlice = 0 } };
-	combineVerifyTex = new Texture2D(desc, "SnowDeformation::ShelterMaskVerify");
-	combineVerifyTex->CreateSRV(srvDesc);
-	combineVerifyTex->CreateUAV(uavDesc);
-	return true;
-}
-
 bool SnowDeformation::EnsureStaticsRecordCB(uint32_t a_count)
 {
 	auto* device = globals::d3d::device;
@@ -1131,7 +1042,7 @@ void SnowDeformation::RenderObjectHeightMap()
 	const bool emptyWindow = !heightGhostsLive && std::ranges::none_of(capturedStatics, [&](const auto& a_cap) {
 		return a_cap.geometry && !outsideWindow(a_cap.geometry.get(), halfExtent);
 	});
-	const bool keepEmpty = emptyWindow && heightMapsEmpty && !processData.ClearAll && !heightRasterCacheOff;
+	const bool keepEmpty = emptyWindow && heightMapsEmpty && !processData.ClearAll;
 
 	uint previous = heightCurrent;
 	if (!keepEmpty)
@@ -1297,13 +1208,9 @@ void SnowDeformation::RenderObjectHeightMap()
 		return key;
 	};
 	auto levelKept = [&](uint32_t a_level, std::vector<uint8_t> a_key) {
-		const bool kept = !heightRasterCacheOff && a_key == heightRasterKey[a_level];
-		if (kept) {
-			heightRasterKeptBits |= 1u << a_level;
-			heightRasterKept[a_level]++;
-		} else {
+		const bool kept = a_key == heightRasterKey[a_level];
+		if (!kept)
 			heightRasterKey[a_level] = std::move(a_key);
-		}
 		return kept;
 	};
 	auto drawList = [&](const std::vector<HeightRasterDraw>& a_draws) {
@@ -1319,32 +1226,6 @@ void SnowDeformation::RenderObjectHeightMap()
 			context->DrawIndexed(d.indexCount, 0, 0);
 		}
 	};
-	heightRasterKeptBits = 0;
-	heightRasterRuns++;
-	const bool verifyOn = heightRasterVerify && EnsureHeightRasterVerify();
-	const bool combineVerifyOn = combineVerify && EnsureHeightRasterVerify() && EnsureCombineVerify();
-	uint32_t verifiedLevels = 0;
-	if (verifyOn || combineVerifyOn) {
-		const UINT zero4[4] = {};
-		context->ClearUnorderedAccessViewUint(heightRasterVerifyAllUAV.get(), zero4);
-	}
-	ID3D11Buffer* compareCB = heightProcessCB->CB();
-	auto compareKept = [&](Texture2D* a_kept, Texture2D* a_fresh, uint32_t a_slot) {
-		ID3D11ShaderResourceView* compareSRVs[2] = { a_kept->srv.get(), a_fresh->srv.get() };
-		ID3D11ShaderResourceView* nullCompareSRVs[2] = {};
-		ID3D11UnorderedAccessView* countUAV = heightRasterVerifySlotUAV[a_slot].get();
-		ID3D11Buffer* nullCompareCB = nullptr;
-		context->CSSetConstantBuffers(0, 1, &compareCB);
-		context->CSSetShaderResources(8, 2, compareSRVs);
-		context->CSSetUnorderedAccessViews(4, 1, &countUAV, nullptr);
-		context->CSSetShader(heightRasterCompareCS.get(), nullptr, 0);
-		context->Dispatch((a_kept->desc.Width + 7) / 8, (a_kept->desc.Height + 7) / 8, 1);
-		context->CSSetShaderResources(8, 2, nullCompareSRVs);
-		context->CSSetUnorderedAccessViews(4, 1, nullCsUAVs, nullptr);
-		context->CSSetConstantBuffers(0, 1, &nullCompareCB);
-		context->CSSetShader(nullptr, nullptr, 0);
-	};
-
 	std::vector<HeightRasterDraw> layer1Draws;
 	for (uint32_t ci = 0; ci < captureCount; ci++) {
 		const auto& cap = capturedStatics[ci];
@@ -1362,32 +1243,24 @@ void SnowDeformation::RenderObjectHeightMap()
 			heightGhostsLive = true;
 		}
 	}
-	auto drawLayer1 = [&](ID3D11RenderTargetView* a_raster) {
-		context->ClearRenderTargetView(a_raster, rasterClear);
-		context->OMSetRenderTargets(1, &a_raster, nullptr);
-		context->PSSetShader(heightPS.get(), nullptr, 0);
-		drawList(layer1Draws);
-	};
 	const bool layer1Kept = levelKept(0, rasterKey(layer1Draws, { reinterpret_cast<uint64_t>(heightVS.get()), reinterpret_cast<uint64_t>(heightPS.get()),
 																	reinterpret_cast<uint64_t>(captureTerrainSRV), shellTerrainVersion,
 																	std::bit_cast<uint32_t>(processData.TerrainWindowOrigin.x), std::bit_cast<uint32_t>(processData.TerrainWindowOrigin.y),
 																	std::bit_cast<uint32_t>(processData.TerrainTexelSize), processData.TerrainDim }));
 	ID3D11RenderTargetView* nullRTVs[3] = { nullptr, nullptr, nullptr };
 	globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Layer 1"));
-	if (!layer1Kept)
-		drawLayer1(heightRaster->rtv.get());
-	const bool verifyLayer1 = verifyOn && (layer1Kept || heightRasterVerifyMiss);
-	if (verifyLayer1)
-		drawLayer1(heightRasterVerifyTex[0]->rtv.get());
+	if (!layer1Kept) {
+		ID3D11RenderTargetView* raster = heightRaster->rtv.get();
+		context->ClearRenderTargetView(raster, rasterClear);
+		context->OMSetRenderTargets(1, &raster, nullptr);
+		context->PSSetShader(heightPS.get(), nullptr, 0);
+		drawList(layer1Draws);
+	}
 	globals::profiler->EndPass();
 
 	context->OMSetRenderTargets(3, nullRTVs, nullptr);
 	context->OMSetBlendState(heightMaxBlendState.get(), nullptr, 0xFFFFFFFF);
 	context->PSSetShader(heightPS.get(), nullptr, 0);
-	if (verifyLayer1) {
-		compareKept(heightRaster, heightRasterVerifyTex[0], 0);
-		verifiedLevels |= 1u;
-	}
 
 	globals::profiler->BeginPass(SnowDevSwitches::HeightMapRow("SnowDeformation::Objects - Height Maps Ghost Merge"));
 	if (!keepEmpty)
@@ -1421,15 +1294,10 @@ void SnowDeformation::RenderObjectHeightMap()
 		context->CSSetShaderResources(0, 2, combineSRVs);
 		context->CSSetShaderResources(5, 1, &exclusionListSRV);
 		context->CSSetShader(heightCombineCS.get(), nullptr, 0);
-		auto combine = [&](Texture2D* a_mask, ID3D11ShaderResourceView* a_tiles) {
-			ID3D11UnorderedAccessView* combineUAVs[3] = { nullptr, nullptr, a_mask->uav.get() };
-			context->CSSetShaderResources(4, 1, &a_tiles);
-			context->CSSetUnorderedAccessViews(0, 3, combineUAVs, nullptr);
-			context->Dispatch(dispatchDim, dispatchDim, 1);
-		};
-		combine(heightBottomFiltered, tileSRV);
-		if (combineVerifyOn)
-			combine(combineVerifyTex, nullptr);
+		ID3D11UnorderedAccessView* combineUAVs[3] = { nullptr, nullptr, heightBottomFiltered->uav.get() };
+		context->CSSetShaderResources(4, 1, &tileSRV);
+		context->CSSetUnorderedAccessViews(0, 3, combineUAVs, nullptr);
+		context->Dispatch(dispatchDim, dispatchDim, 1);
 		context->CSSetShaderResources(0, 2, nullCsSRVs);
 		context->CSSetShaderResources(4, 2, nullCsSRVs);
 		ID3D11UnorderedAccessView* nullCombineUAVs[3] = { nullptr, nullptr, nullptr };
@@ -1439,55 +1307,8 @@ void SnowDeformation::RenderObjectHeightMap()
 	}
 
 	globals::profiler->EndPass();
-	if (combineVerifyOn) {
-		compareKept(heightBottomFiltered, combineVerifyTex, 6);
-		verifiedLevels |= 1u << 5;
-	}
 
 	heightMapsEmpty = emptyWindow && keepEmpty;
-
-	if ((verifyOn || combineVerifyOn) && verifiedLevels) {
-		auto& ring = heightRasterVerifyRing;
-		if (!heightRasterVerifyStagingLevels[ring % 3]) {
-			context->CopyResource(heightRasterVerifyStaging[ring % 3].get(), heightRasterVerifyCount.get());
-			heightRasterVerifyStagingLevels[ring % 3] = verifiedLevels;
-			ring++;
-		}
-	}
-	if (heightRasterVerifyStaging[0]) {
-		for (uint32_t slot = 0; slot < 3; slot++) {
-			const uint32_t levels = heightRasterVerifyStagingLevels[slot];
-			if (!levels)
-				continue;
-			D3D11_MAPPED_SUBRESOURCE mapped{};
-			if (FAILED(context->Map(heightRasterVerifyStaging[slot].get(), 0, D3D11_MAP_READ, D3D11_MAP_FLAG_DO_NOT_WAIT, &mapped)))
-				continue;
-			const auto* words = static_cast<const uint32_t*>(mapped.pData);
-			for (uint32_t level = 0; level < 6; level++)
-				if (levels & (1u << level))
-					heightRasterVerified[level]++;
-			bool sampled = false;
-			for (uint32_t target = 0; target < kHeightVerifySlots; target++) {
-				const uint32_t level = kHeightVerifyTargetLevel[target];
-				const uint32_t count = words[target * kHeightVerifySlotWords];
-				if (!(levels & (1u << level)) || !count)
-					continue;
-				heightRasterMismatch[target] += count;
-				const std::scoped_lock debugLock(heightRasterDebugLock);
-				if (!sampled) {
-					heightRasterSamples.clear();
-					sampled = true;
-				}
-				for (uint32_t i = 0; i < std::min(count, kHeightVerifySamples); i++) {
-					const uint32_t* s = words + target * kHeightVerifySlotWords + 4 + i * 8;
-					heightRasterSamples.push_back({ target, s[0] & 0xFFFF, s[0] >> 16, std::bit_cast<float>(s[1]), std::bit_cast<float>(s[2]),
-						std::bit_cast<float>(s[3]), std::bit_cast<float>(s[4]) });
-				}
-			}
-			context->Unmap(heightRasterVerifyStaging[slot].get(), 0);
-			heightRasterVerifyStagingLevels[slot] = 0;
-		}
-	}
 
 	globals::profiler->MarkPassSkipped("SnowDeformation::Objects - Height Maps");
 

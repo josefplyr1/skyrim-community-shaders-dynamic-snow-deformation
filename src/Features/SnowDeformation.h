@@ -988,9 +988,6 @@ public:
 	Texture2D* heightRaster = nullptr;
 	Texture2D* heightBottomFiltered = nullptr;
 	Texture2D* heightTileEmpty = nullptr;
-	bool combineVerify = false;
-	Texture2D* combineVerifyTex = nullptr;
-	bool EnsureCombineVerify();
 	static constexpr int kQualityPresetCount = 3;
 	/** @brief Quality presets, Low (0) to High (2); High is the shipped defaults. Sets every preset lever; the rest of the settings keep their values. */
 	void ApplyQualityPreset(int a_preset);
@@ -1043,30 +1040,6 @@ public:
 	winrt::com_ptr<ID3D11PixelShader> heightPS;
 	winrt::com_ptr<ID3D11ComputeShader> heightScrollRasterCS;
 	std::vector<uint8_t> heightRasterKey[3];
-	bool heightRasterCacheOff = false;
-	bool heightRasterVerify = false;
-	bool heightRasterVerifyMiss = false;
-	uint32_t heightRasterKeptBits = 0;
-	uint32_t heightRasterRuns = 0;
-	uint32_t heightRasterKept[3] = {};
-	uint32_t heightRasterVerified[6] = {};
-	uint64_t heightRasterMismatch[7] = {};
-	Texture2D* heightRasterVerifyTex[4] = {};
-	winrt::com_ptr<ID3D11Buffer> heightRasterVerifyCount;
-	winrt::com_ptr<ID3D11UnorderedAccessView> heightRasterVerifyAllUAV;
-	winrt::com_ptr<ID3D11UnorderedAccessView> heightRasterVerifySlotUAV[7];
-	winrt::com_ptr<ID3D11Buffer> heightRasterVerifyStaging[3];
-	uint32_t heightRasterVerifyStagingLevels[3] = {};
-	uint32_t heightRasterVerifyRing = 0;
-	winrt::com_ptr<ID3D11ComputeShader> heightRasterCompareCS;
-	struct HeightRasterSample
-	{
-		uint32_t target, x, y;
-		float keptX, keptY, freshX, freshY;
-	};
-	std::vector<HeightRasterSample> heightRasterSamples;
-	std::mutex heightRasterDebugLock;
-	bool EnsureHeightRasterVerify();
 	winrt::com_ptr<ID3D11ComputeShader> heightCombineCS;
 	winrt::com_ptr<ID3D11ComputeShader> heightWaterCoverCS;
 

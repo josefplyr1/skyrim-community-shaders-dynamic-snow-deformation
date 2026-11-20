@@ -1314,7 +1314,7 @@ void SnowDeformation::ClearShaderCache()
 		key.clear();
 	auto release = [](auto&... a_shaders) { ((a_shaders = nullptr), ...); };
 	release(shellPSDeferred, shellPSPrepassEarly, shellPSEarlyResolve, shellFillVS, shellFillPS, shellFillPSClaim);
-	release(heightVS, heightPS, heightScrollRasterCS, heightRasterCompareCS, heightCombineCS);
+	release(heightVS, heightPS, heightScrollRasterCS, heightCombineCS);
 }
 
 void SnowDeformation::LoadSettings(json& o_json)
