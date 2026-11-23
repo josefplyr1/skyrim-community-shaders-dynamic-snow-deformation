@@ -1057,7 +1057,7 @@ public:
 	winrt::com_ptr<ID3D11ComputeShader> heightCombineCS;
 	winrt::com_ptr<ID3D11ComputeShader> heightWaterCoverCS;
 
-	/** @brief Per-dispatch constants for the height-window processing and the height capture PS. Layout must match HeightProcessFields.hlsli. */
+	/** @brief Per-update constants for the height-window processing and the height capture PS. Layout must match HeightProcessFields.hlsli. */
 	struct alignas(16) HeightProcessCB
 	{
 		DirectX::XMINT2 ScrollDelta;
@@ -1071,20 +1071,15 @@ public:
 		float2 TerrainWindowOrigin;
 		float TerrainTexelSize;
 		uint TerrainDim;
-	};
-	STATIC_ASSERT_ALIGNAS_16(HeightProcessCB);
-	static_assert(sizeof(HeightProcessCB) == 48, "HeightProcessCB must match the fxc-reflected layout of HeightProcessFields.hlsli");
 
-	ConstantBuffer* heightProcessCB = nullptr;
-
-	/** @brief ScrollCS only: the camera clip transform, so the ghost merge can ask whether the surface that wrote a stale texel would still have been submitted this frame. Layout must match GhostCB in HeightMapProcessCS.hlsl. */
-	struct alignas(16) HeightGhostCB
-	{
+		/** @brief ScrollCS's ghost merge: the camera clip transform, to ask whether the surface that wrote a stale texel was still submitted this frame. */
 		Matrix GhostViewProj;
 		float4 GhostCameraPosAdjust;
 	};
-	STATIC_ASSERT_ALIGNAS_16(HeightGhostCB);
-	ConstantBuffer* heightGhostCB = nullptr;
+	STATIC_ASSERT_ALIGNAS_16(HeightProcessCB);
+	static_assert(sizeof(HeightProcessCB) == 128, "HeightProcessCB must match the fxc-reflected layout of HeightProcessFields.hlsli");
+
+	ConstantBuffer* heightProcessCB = nullptr;
 
 	static constexpr uint kMaxExclusions = 256;
 	static constexpr float kTorchClearRadius = 40.0f;

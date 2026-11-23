@@ -265,7 +265,6 @@ void SnowDeformation::SetupResources()
 	shellCB = new ConstantBuffer(ConstantBufferDesc<ShellCB>(), "SnowDeformation::ShellCB");
 	staticsCB = new ConstantBuffer(ConstantBufferDesc<StaticsCB>(), "SnowDeformation::StaticsCB");
 	heightProcessCB = new ConstantBuffer(ConstantBufferDesc<HeightProcessCB>(), "SnowDeformation::HeightProcessCB");
-	heightGhostCB = new ConstantBuffer(ConstantBufferDesc<HeightGhostCB>(), "SnowDeformation::HeightGhostCB");
 	doorsCB = new ConstantBuffer(ConstantBufferDesc<ExclusionsCB>(), "SnowDeformation::ExclusionsCB");
 	exclusionListBuffer = new StructuredBuffer(StructuredBufferDesc<float4>(kMaxExclusions * 2), kMaxExclusions * 2, "SnowDeformation::ExclusionList");
 	exclusionListBuffer->CreateSRV();
