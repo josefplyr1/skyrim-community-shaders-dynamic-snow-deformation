@@ -423,7 +423,6 @@ public:
 		kDeformationScanEvolveCS,
 		kDeformationScanSnapshotCS,
 		kDeformationSnapshotCS,
-		kDeformationSnapshotFullCS,
 		kDeformationScanBermCS,
 		kUntouchedTilesCS,
 		kBermFieldTiledCS,

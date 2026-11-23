@@ -914,16 +914,6 @@ void SnowDeformation::PrepassSimulation()
 					context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
 					ID3D11ShaderResourceView* nullSRV = nullptr;
 					context->CSSetShaderResources(0, 1, &nullSRV);
-				} else if (auto* fullSnapshotCS = GetSnowCS(kDeformationSnapshotFullCS)) {
-					ID3D11ShaderResourceView* mapSRV = map->srv.get();
-					ID3D11UnorderedAccessView* scratchUAV = scratch->uav.get();
-					context->CSSetShaderResources(0, 1, &mapSRV);
-					context->CSSetUnorderedAccessViews(0, 1, &scratchUAV, nullptr);
-					context->CSSetShader(fullSnapshotCS, nullptr, 0);
-					context->Dispatch(tilesPerAxis, tilesPerAxis, 1);
-					context->CSSetUnorderedAccessViews(0, 1, &nullUav, nullptr);
-					ID3D11ShaderResourceView* nullSRV = nullptr;
-					context->CSSetShaderResources(0, 1, &nullSRV);
 				}
 				globals::profiler->EndPass();
 
@@ -1112,7 +1102,6 @@ ID3D11ComputeShader* SnowDeformation::GetSnowCS(SnowCS a_which)
 		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "ScanEvolveCS", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "ScanSnapshotCS", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "SnapshotCS", nullptr },
-		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "SnapshotFullCS", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\DeformationUpdateCS.hlsl", "ScanBermCS", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\BermFieldCS.hlsl", "UntouchedCS", nullptr },
 		{ L"Data\\Shaders\\SnowDeformation\\BermFieldCS.hlsl", "BermTiledCS", nullptr },
