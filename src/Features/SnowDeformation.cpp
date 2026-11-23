@@ -1120,6 +1120,7 @@ ID3D11ComputeShader* SnowDeformation::GetSnowCS(SnowCS a_which)
 		std::vector<std::pair<const char*, const char*>> defines;
 		if (shader.define)
 			defines.emplace_back(shader.define, "");
+		AddShellFeatureDefines(defines);
 		slot.attach(static_cast<ID3D11ComputeShader*>(Util::CompileShader(shader.path, defines, "cs_5_0", shader.entry)));
 	}
 	return slot.get();

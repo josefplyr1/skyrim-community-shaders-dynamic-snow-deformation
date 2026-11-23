@@ -801,8 +801,12 @@ public:
 
 	/** @brief Lazy-loads the shell snow texture set (and its authored PBR parameters) from the user-configured path. Implemented in SnowDeformation/Shell.cpp. */
 	void EnsureShellSnowTextures();
-	/** @brief PS define list for the shell shaders: PSHADER, optional extra, plus SNOW_EXP_HEIGHT_FOG when the EHF addon is loaded. Implemented in SnowDeformation/Shell.cpp. */
+	/** @brief PS define list for the shell shaders: PSHADER, optional extra, SNOW_EXP_HEIGHT_FOG and SNOW_IBL when those features are loaded, and the shell feature defines. Implemented in SnowDeformation/Shell.cpp. */
 	static std::vector<std::pair<const char*, const char*>> ShellPSDefines(const char* a_extra = nullptr);
+	/** @brief Adds SNOW_TERRAIN_VARIATION and SNOW_SKYLIGHTING when those optional features are loaded; every shader that includes SnowShell.hlsl takes them. Implemented in SnowDeformation/Shell.cpp. */
+	static void AddShellFeatureDefines(std::vector<std::pair<const char*, const char*>>& a_defines);
+	/** @brief Define list for a non-PS shader that includes SnowShell.hlsl: an optional extra plus the shell feature defines. Implemented in SnowDeformation/Shell.cpp. */
+	static std::vector<std::pair<const char*, const char*>> ShellDefines(const char* a_extra = nullptr);
 	/** @brief Re-reads the matched TruePBR texture set's values (per frame: follows ReloadTextureSetData and live menu edits). Implemented in SnowDeformation/Shell.cpp. */
 	void RefreshSnowPBRParams();
 
